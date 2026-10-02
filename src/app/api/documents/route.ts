@@ -1,10 +1,10 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { badRequest } from "@/lib/errors";
+import { badRequest, unprocessable } from "@/lib/errors";
 import { listParams, route } from "@/server/api";
 import { assertCompany, companyScope, requirePerm } from "@/server/context";
 import { audit } from "@/server/audit";
-import { activeStorage, ALLOWED_MIME, makeKey } from "@/server/storage";
+import { activeStorage, ALLOWED_MIME, makeKey, storagePolicyProblem } from "@/server/storage";
 
 export const GET = route(async ({ req, ctx }) => {
   requirePerm(ctx, "documents", "view");
@@ -39,6 +39,8 @@ export const POST = route(async ({ req, ctx }) => {
   const entityType = (form.get("entityType") as string) || null;
   const entityId = (form.get("entityId") as string) || null;
   const key = makeKey(companyId, file.name);
+  const problem = storagePolicyProblem();
+  if (problem) throw unprocessable(problem);
   const storage = activeStorage();
   await storage.put(key, Buffer.from(await file.arrayBuffer()), mime);
   try {

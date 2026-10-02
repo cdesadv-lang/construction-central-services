@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/db";
 import { createSession } from "@/server/auth";
-import { LocalDiskStorage, S3Storage, driverFor } from "@/server/storage";
+import { LocalDiskStorage, S3Storage, activeDriverName, driverFor, silenceSdkNodeWarning, storagePolicyProblem } from "@/server/storage";
 import { NextRequest } from "next/server";
 import { POST as upload } from "@/app/api/documents/route";
 import { GET as download, DELETE as del } from "@/app/api/documents/[id]/route";
@@ -18,6 +18,33 @@ describe("local disk driver", () => {
     await s.remove("t/a.txt");
     await expect(s.get("t/a.txt")).rejects.toThrow();
     await expect(s.put("../../etc/x", Buffer.from("x"))).rejects.toThrow("Invalid storage key");
+  });
+});
+
+describe("storage selection from the environment", () => {
+  it("STORAGE_DRIVER wins; otherwise s3 when S3_BUCKET is set; local by default", () => {
+    expect(activeDriverName({})).toBe("local");
+    expect(activeDriverName({ S3_BUCKET: "b" })).toBe("s3");
+    expect(activeDriverName({ S3_BUCKET: "b", STORAGE_DRIVER: "local" })).toBe("local");
+    expect(activeDriverName({ STORAGE_DRIVER: "S3" })).toBe("s3");
+  });
+  it("refuses local uploads on an ephemeral filesystem (Vercel) unless explicitly allowed", () => {
+    expect(storagePolicyProblem({ VERCEL: "1" })).toMatch(/persistent storage/);
+    expect(storagePolicyProblem({ VERCEL: "1", S3_BUCKET: "b" })).toBeNull();
+    expect(storagePolicyProblem({ VERCEL: "1", ALLOW_EPHEMERAL_UPLOADS: "true" })).toBeNull();
+    expect(storagePolicyProblem({ EPHEMERAL_FS: "true" })).toMatch(/persistent storage/);
+    expect(storagePolicyProblem({})).toBeNull();
+  });
+  it("silences the AWS SDK Node-version notice only on Node < 22 and never overrides an explicit setting", () => {
+    const a: Record<string, string | undefined> = {};
+    silenceSdkNodeWarning("v20.19.2", a);
+    expect(a.AWS_SDK_JS_NODE_VERSION_SUPPORT_WARNING_DISABLED).toBe("true");
+    const b: Record<string, string | undefined> = {};
+    silenceSdkNodeWarning("v22.11.0", b);
+    expect(b.AWS_SDK_JS_NODE_VERSION_SUPPORT_WARNING_DISABLED).toBeUndefined();
+    const c: Record<string, string | undefined> = { AWS_SDK_JS_NODE_VERSION_SUPPORT_WARNING_DISABLED: "false" };
+    silenceSdkNodeWarning("v20.19.2", c);
+    expect(c.AWS_SDK_JS_NODE_VERSION_SUPPORT_WARNING_DISABLED).toBe("false");
   });
 });
 

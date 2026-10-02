@@ -1,6 +1,6 @@
 # Construction Central Services ERP — production image
 # Build:  docker build -t ccs-erp .
-FROM node:20-bookworm-slim AS deps
+FROM node:22-bookworm-slim AS deps
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
@@ -12,7 +12,7 @@ WORKDIR /app
 COPY . .
 RUN npx prisma generate && npm run build
 
-FROM node:20-bookworm-slim AS runner
+FROM node:22-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production \
     PORT=3000 \
@@ -27,7 +27,7 @@ COPY --from=build --chown=app:node /app/public ./public
 COPY --from=build --chown=app:node /app/prisma ./prisma
 COPY --from=build --chown=app:node /app/src ./src
 COPY --from=build --chown=app:node /app/tsconfig.json /app/next.config.ts ./
-COPY --chown=app:node scripts/docker-entrypoint.sh ./scripts/docker-entrypoint.sh
+COPY --from=build --chown=app:node /app/scripts ./scripts
 USER app
 EXPOSE 3000
 VOLUME ["/app/storage"]

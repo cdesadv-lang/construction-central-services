@@ -1,6 +1,9 @@
 // Storage abstraction for attachments.
-//   STORAGE_DRIVER=local (default) -> LocalDiskStorage under UPLOAD_DIR
+//   STORAGE_DRIVER=local           -> LocalDiskStorage under UPLOAD_DIR
 //   STORAGE_DRIVER=s3              -> S3Storage (AWS S3 or any S3-compatible service: MinIO, Cloudflare R2, Wasabi, DO Spaces…)
+//   STORAGE_DRIVER unset           -> s3 when S3_BUCKET is set, otherwise local
+// On hosts with an ephemeral filesystem (Vercel, or EPHEMERAL_FS=true) local uploads are refused unless
+// ALLOW_EPHEMERAL_UPLOADS=true, because files would disappear on the next deploy / instance.
 // Every Document row records the driver that stored it (Document.storageDriver), so switching drivers keeps old files readable.
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -8,6 +11,7 @@ import crypto from "node:crypto";
 import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 
 export type DriverName = "local" | "s3";
+type Env = Record<string, string | undefined>;
 
 export interface StorageDriver {
   readonly name: DriverName;
@@ -57,6 +61,7 @@ export class S3Storage implements StorageDriver {
   private client: S3Client;
   constructor(private cfg: S3Config) {
     if (!cfg.bucket) throw new Error("S3_BUCKET is required when STORAGE_DRIVER=s3");
+    silenceSdkNodeWarning();
     this.client = new S3Client({
       region: cfg.region || "us-east-1",
       endpoint: cfg.endpoint || undefined,
@@ -84,6 +89,16 @@ export class S3Storage implements StorageDriver {
   }
 }
 
+/**
+ * AWS SDK v3 releases after early January 2027 require Node >= 22 and print a NodeVersionSupportWarning on older
+ * runtimes. Production images/hosts run Node 22 (Dockerfile, .nvmrc); on Node 20 the warning is informational
+ * only, so it is silenced unless the operator explicitly set AWS_SDK_JS_NODE_VERSION_SUPPORT_WARNING_DISABLED.
+ */
+export function silenceSdkNodeWarning(version: string = process.version, env: Env = process.env) {
+  const major = Number(version.replace(/^v/, "").split(".")[0]);
+  if (major < 22 && env.AWS_SDK_JS_NODE_VERSION_SUPPORT_WARNING_DISABLED === undefined) env.AWS_SDK_JS_NODE_VERSION_SUPPORT_WARNING_DISABLED = "true";
+}
+
 export function s3ConfigFromEnv(env: NodeJS.ProcessEnv = process.env): S3Config {
   return {
     bucket: env.S3_BUCKET ?? "",
@@ -109,9 +124,24 @@ export function driverFor(name: string | null | undefined): StorageDriver {
   return d;
 }
 
-/** Driver used for new uploads (STORAGE_DRIVER). */
+/** Driver name for new uploads: STORAGE_DRIVER, else s3 when S3_BUCKET is configured, else local. */
+export function activeDriverName(env: Env = process.env): DriverName {
+  const explicit = env.STORAGE_DRIVER?.trim().toLowerCase();
+  if (explicit === "s3" || explicit === "local") return explicit;
+  return env.S3_BUCKET?.trim() ? "s3" : "local";
+}
+
+/** Explains why local storage is unsafe on this host (ephemeral filesystem), or null. */
+export function storagePolicyProblem(env: Env = process.env): string | null {
+  if (activeDriverName(env) !== "local" || env.ALLOW_EPHEMERAL_UPLOADS === "true") return null;
+  if (env.VERCEL || env.EPHEMERAL_FS === "true")
+    return "Attachments need persistent storage on this host (its filesystem is ephemeral): set S3_BUCKET (and S3_* credentials) or STORAGE_DRIVER=s3";
+  return null;
+}
+
+/** Driver used for new uploads. */
 export function activeStorage(): StorageDriver {
-  return driverFor(process.env.STORAGE_DRIVER);
+  return driverFor(activeDriverName());
 }
 
 export function makeKey(companyId: string, fileName: string) {
