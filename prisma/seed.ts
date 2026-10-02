@@ -213,6 +213,20 @@ const COMPANIES: CompanySeed[] = [
   },
 ];
 
+/** Lowest running balance of a cash/bank account over time (EGP; in currency for foreign accounts). */
+async function runningMin(companyId: string, accountId: string) {
+  const rows = await prisma.$queryRaw<{ min: number | null }[]>`
+    SELECT MIN(run)::float AS min FROM (
+      SELECT SUM(amt) OVER (ORDER BY date) AS run FROM (
+        SELECT e."date", SUM(CASE WHEN l."currency" IS NOT NULL AND l."currency" <> 'EGP'
+                                  THEN (CASE WHEN l."debit" > 0 THEN l."fxAmount" ELSE -l."fxAmount" END)
+                                  ELSE l."debit" - l."credit" END) AS amt
+        FROM "JournalLine" l JOIN "JournalEntry" e ON e."id" = l."entryId"
+        WHERE e."companyId" = ${companyId} AND e."status" = 'POSTED' AND l."accountId" = ${accountId}
+        GROUP BY e."date") d) r`;
+  return Number(rows[0]?.min ?? 0);
+}
+
 async function main() {
   console.log("Resetting database...");
   await reset();
@@ -493,7 +507,7 @@ async function main() {
     // Cash funding for site + direct expenses
     const dep = await create(treasuryCtx, "treasury-transactions", { ...C, kind: "BANK_WITHDRAWAL", date: "2026-03-01", amount: 400_000, cashBoxId: mainCash.id, bankAccountId: banks[0].id, description: "سحب نقدية لتغذية الخزينة" });
     await post("treasury-transactions", dep.id, treasuryCtx);
-    const tr = await create(treasuryCtx, "treasury-transactions", { ...C, kind: "CASH_TRANSFER", date: "2026-03-02", amount: 150_000, cashBoxId: mainCash.id, toCashBoxId: siteCash.id, description: "تحويل لخزينة المواقع" });
+    const tr = await create(treasuryCtx, "treasury-transactions", { ...C, kind: "CASH_TRANSFER", date: "2026-03-02", amount: 250_000, cashBoxId: mainCash.id, toCashBoxId: siteCash.id, description: "تحويل لخزينة المواقع" });
     await post("treasury-transactions", tr.id, treasuryCtx);
     const bt = await create(treasuryCtx, "treasury-transactions", { ...C, kind: "BANK_TRANSFER", date: "2026-04-01", amount: 2_000_000, bankAccountId: banks[0].id, toBankAccountId: banks[1].id, description: "تحويل بين الحسابات البنكية" });
     await post("treasury-transactions", bt.id, treasuryCtx);
@@ -697,6 +711,25 @@ async function main() {
       const pex = await create(extractCtx, "contractor-extracts", { ...C, contractId: sc1.id, periodFrom: "2026-07-01", periodTo: "2026-09-30", date: "2026-09-30", cumulativeGross: nextCum, description: "مستخلص جاري - تحت المراجعة" });
       await act(extractCtx, "contractor-extracts", pex.id, "submit");
     }
+
+    // Liquidity: no cash box / bank account may dip below zero at any date. Fund any shortfall early in the year
+    // (transfer from the main bank, or a cash withdrawal for cash boxes); top up the main bank with capital if needed.
+    const egpAccounts = [...banks.slice(1).map((b) => ({ kind: "bank" as const, row: b })), { kind: "cash" as const, row: siteCash }, { kind: "cash" as const, row: mainCash }];
+    for (const a of egpAccounts) {
+      const min = await runningMin(co.id, a.row.accountId);
+      if (min >= 0) continue;
+      const amount = Math.ceil((-min + 50_000) / 50_000) * 50_000;
+      const body = a.kind === "bank"
+        ? { kind: "BANK_TRANSFER", bankAccountId: banks[0].id, toBankAccountId: a.row.id, description: "تمويل الحساب البنكي من الحساب الرئيسي" }
+        : { kind: "BANK_WITHDRAWAL", bankAccountId: banks[0].id, cashBoxId: a.row.id, description: "تغذية الخزينة من البنك الرئيسي" };
+      const t = await create(treasuryCtx, "treasury-transactions", { ...C, date: "2025-07-02", amount, ...body });
+      await post("treasury-transactions", t.id, treasuryCtx);
+    }
+    const mainMin = await runningMin(co.id, banks[0].accountId);
+    if (mainMin < 0) {
+      const t = await create(treasuryCtx, "treasury-transactions", { ...C, kind: "BANK_RECEIPT", date: "2025-07-01", amount: Math.ceil((-mainMin + 100_000) / 100_000) * 100_000, bankAccountId: banks[0].id, counterAccountId: capital, description: "زيادة رأس المال المدفوع" });
+      await post("treasury-transactions", t.id, treasuryCtx);
+    }
   }
 
   // Restrict the site accountant to a single project (project-level permissions demo)
@@ -720,6 +753,12 @@ async function main() {
     // Year-end close of FY 2025: posts the closing entry (revenue & expenses -> retained earnings)
     const fy25 = await prisma.fiscalYear.findFirstOrThrow({ where: { companyId: co.id, name: "2025" }, include: { periods: true } });
     if (fy25.periods.every((p) => p.status === "CLOSED")) await act(ctxByRole.FINANCE_MANAGER!, "fiscal-years", fy25.id, "close");
+  }
+
+  // Sanity: no cash box or bank account is overdrawn at any date
+  for (const a of await prisma.account.findMany({ where: { parent: { systemKey: { in: ["CASH_PARENT", "BANK_PARENT"] } } } })) {
+    const min = await runningMin(a.companyId, a.id);
+    if (min < -0.005) throw new Error(`Seed invariant: ${a.code} ${a.name} goes negative (${min})`);
   }
 
   const counts = {
