@@ -1222,8 +1222,9 @@ model Document {
   fileName     String
   mimeType     String
   size         Int
-  storageKey   String
-  uploadedById String?
+  storageKey    String
+  storageDriver String   @default("local")
+  uploadedById  String?
   createdAt    DateTime @default(now())
 
   @@index([companyId])

@@ -4,7 +4,7 @@ import { badRequest } from "@/lib/errors";
 import { listParams, route } from "@/server/api";
 import { assertCompany, companyScope, requirePerm } from "@/server/context";
 import { audit } from "@/server/audit";
-import { ALLOWED_MIME, makeKey, storage } from "@/server/storage";
+import { activeStorage, ALLOWED_MIME, makeKey } from "@/server/storage";
 
 export const GET = route(async ({ req, ctx }) => {
   requirePerm(ctx, "documents", "view");
@@ -39,12 +39,18 @@ export const POST = route(async ({ req, ctx }) => {
   const entityType = (form.get("entityType") as string) || null;
   const entityId = (form.get("entityId") as string) || null;
   const key = makeKey(companyId, file.name);
-  await storage.put(key, Buffer.from(await file.arrayBuffer()));
-  return prisma.$transaction(async (tx) => {
-    const doc = await tx.document.create({
-      data: { companyId, entityType, entityId, title: (form.get("title") as string) || file.name, fileName: file.name, mimeType: mime, size: file.size, storageKey: key, uploadedById: ctx.user.id },
+  const storage = activeStorage();
+  await storage.put(key, Buffer.from(await file.arrayBuffer()), mime);
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const doc = await tx.document.create({
+        data: { companyId, entityType, entityId, title: (form.get("title") as string) || file.name, fileName: file.name, mimeType: mime, size: file.size, storageKey: key, storageDriver: storage.name, uploadedById: ctx.user.id },
+      });
+      await audit(tx, ctx, { action: "UPLOAD", entity: "Document", entityId: doc.id, companyId, after: doc });
+      return doc;
     });
-    await audit(tx, ctx, { action: "UPLOAD", entity: "Document", entityId: doc.id, companyId, after: doc });
-    return doc;
-  });
+  } catch (e) {
+    await storage.remove(key).catch(() => {}); // don't leave orphaned objects behind
+    throw e;
+  }
 });
