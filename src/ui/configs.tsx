@@ -249,7 +249,9 @@ export function buildConfigs(t: T): Record<string, ResourceConfig> {
         { key: "bankAccountId", type: "lookup", lookup: "bank-accounts", required: true, showIf: (v) => v.paymentMethod === "BANK" || v.paymentMethod === "CHEQUE", onPick: pickCurrency },
         ...fxForm,
         { key: "custodyId", type: "lookup", lookup: "custodies", required: true, showIf: (v) => v.paymentMethod === "CUSTODY", onPick: (_v, _x, p) => (p ? { employeeId: p.employeeId } : undefined) },
-        { key: "supplierId", type: "lookup", lookup: "suppliers" }, { key: "employeeId", type: "lookup", lookup: "employees" },
+        { key: "chequeNumber", required: true, showIf: (v) => v.paymentMethod === "CHEQUE" }, { key: "chequeDueDate", type: "date", showIf: (v) => v.paymentMethod === "CHEQUE" },
+        { key: "supplierId", type: "lookup", lookup: "suppliers", required: true, showIf: (v) => v.paymentMethod === "CHEQUE" || v.paymentMethod === "CREDIT" },
+        { key: "supplierId", type: "lookup", lookup: "suppliers", showIf: (v) => v.paymentMethod !== "CHEQUE" && v.paymentMethod !== "CREDIT" }, { key: "employeeId", type: "lookup", lookup: "employees" },
         { key: "costCenterId", type: "lookup", lookup: "cost-centers" }, { key: "description", span: 2 },
       ],
       filters: [statusFilter, { key: "type", type: "select", options: EXPENSE_TYPES }, { key: "paymentMethod", type: "select", options: ["CASH", "BANK", "CHEQUE", "CUSTODY", "CREDIT"] }],
@@ -332,7 +334,7 @@ export function buildConfigs(t: T): Record<string, ResourceConfig> {
       columns: [
         { key: "number" }, { key: "type", type: "enum" }, { key: "bankAccount.bankName", label: t("f.bankName") }, { key: "partyName" }, { key: "drawerBank", label: t("x.drawerBank") },
         { key: "issueDate", type: "date" }, { key: "dueDate", type: "date" }, fxCol, { key: "amount", type: "money", total: true }, { key: "status", type: "status" },
-        { key: "paymentId", type: "bool", label: t("f.reference"), get: (r) => !!r.paymentId },
+        { key: "paymentId", type: "bool", label: t("f.reference"), get: (r) => !!(r.paymentId || r.expenseId) },
       ],
       form: [
         { key: "number", required: true, createOnly: true }, { key: "type", type: "select", options: ["ISSUED", "RECEIVED"], required: true, default: "RECEIVED", createOnly: true },

@@ -505,14 +505,21 @@ async function main() {
       ["TRANSPORT", 22_500, "CASH", "نقل مخلفات", 1],
       ["ADMIN", 18_000, "BANK", "مصروفات إدارية - اشتراكات وبرامج", -1],
       ["MATERIALS", 64_000, "CREDIT", "مواد عزل - على الحساب", 0],
+      ["EQUIPMENT", 52_000, "CHEQUE", "صيانة شاملة للمعدات - بشيك", 0],
     ];
     for (const [type, amount, method, desc, pi] of expenseRows) {
       const e = await create(acc, "expenses", {
         ...C, projectId: pi >= 0 ? active[Math.min(pi, active.length - 1)].id : null, type, date: "2026-0" + (4 + (amount % 4)) + "-12", amount, paymentMethod: method,
-        cashBoxId: method === "CASH" ? siteCash.id : null, bankAccountId: method === "BANK" ? banks[1].id : null, supplierId: method === "CREDIT" ? suppliers[0].id : null,
+        cashBoxId: method === "CASH" ? siteCash.id : null, bankAccountId: method === "BANK" || method === "CHEQUE" ? banks[1].id : null, supplierId: method === "CREDIT" || method === "CHEQUE" ? suppliers[0].id : null,
         employeeId: type === "LABOR" ? emps[1].id : null, description: desc,
+        ...(method === "CHEQUE" ? { date: "2026-08-10", chequeNumber: String(660100 + clients.length), chequeDueDate: "2026-08-25" } : {}),
       });
       await post("expenses", e.id, acc);
+      if (method === "CHEQUE") {
+        // the issued cheque is presented and cleared by the bank (bank moves only now)
+        const ch = await prisma.cheque.findFirstOrThrow({ where: { expenseId: e.id } });
+        await act(treasuryCtx, "cheques", ch.id, "clear", { date: "2026-08-26" });
+      }
     }
 
     // Payroll for two months + salary payment

@@ -865,6 +865,8 @@ model Cheque {
   counterAccountId String?
   counterAccount   Account?         @relation(fields: [counterAccountId], references: [id])
   paymentId        String?
+  /// expense paid by cheque (paymentMethod CHEQUE)
+  expenseId        String?
   status           ChequeStatus
   /// false = register-only cheque (legacy rows created before the lifecycle existed): status changes post no entries
   ledger           Boolean          @default(true)
@@ -878,6 +880,7 @@ model Cheque {
   @@unique([companyId, type, number, bankAccountId])
   @@index([companyId, status])
   @@index([paymentId])
+  @@index([expenseId])
 }
 
 model ChequeMovement {
@@ -939,6 +942,9 @@ model Expense {
   employee       Employee?     @relation(fields: [employeeId], references: [id])
   custodyId      String?
   custody        Custody?      @relation(fields: [custodyId], references: [id])
+  /// paymentMethod CHEQUE: an issued cheque is registered on posting and the bank moves when it clears
+  chequeNumber   String?
+  chequeDueDate  DateTime?
   costCenterId   String?
   costCenter     CostCenter?   @relation(fields: [costCenterId], references: [id])
   documentId     String?

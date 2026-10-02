@@ -15,7 +15,7 @@ import {
   type LineInput,
 } from "./accounting";
 import { DOC_TYPES, type DocType } from "./doctypes";
-import { cancelPaymentCheque, registerPaymentCheque } from "./cheques";
+import { cancelExpenseCheque, cancelPaymentCheque, registerExpenseCheque, registerPaymentCheque } from "./cheques";
 import { convertLines, FxError, isForeign, toBase } from "@/lib/fx";
 import { assertSameCurrency } from "./fx";
 
@@ -84,6 +84,12 @@ async function buildEntry(tx: Tx, docType: DocType, doc: any): Promise<{ lines: 
       } else if (doc.paymentMethod === "CREDIT") {
         if (!doc.supplierId) throw badRequest("Supplier is required for credit (on-account) expenses");
         credit = { accountId: await acc("AP_SUPPLIERS"), credit: amount, partyType: "SUPPLIER", partyId: doc.supplierId };
+      } else if (doc.paymentMethod === "CHEQUE") {
+        // an issued cheque: the liability moves to Notes Payable now, the bank moves when the cheque clears (cheque lifecycle)
+        if (!doc.chequeNumber) throw badRequest("Cheque number is required for expenses paid by cheque");
+        if (!doc.supplierId) throw badRequest("Payee (supplier) is required for expenses paid by cheque");
+        await moneyAccount(tx, c, "BANK", null, doc.bankAccountId, cur); // drawn-on account: same company + currency
+        credit = { accountId: await acc("NOTES_PAYABLE"), credit: amount };
       } else {
         credit = { accountId: await moneyAccount(tx, c, doc.paymentMethod, doc.cashBoxId, doc.bankAccountId, cur), credit: amount };
       }
@@ -352,6 +358,10 @@ async function applySideEffects(tx: Tx, docType: DocType, doc: any, sign: 1 | -1
     if (doc.method === "CHEQUE" && sign === 1) await registerPaymentCheque(tx, ctx, doc);
     if (doc.method === "CHEQUE" && sign === -1) await cancelPaymentCheque(tx, ctx, doc);
   }
+  if (docType === "EXPENSE" && doc.paymentMethod === "CHEQUE") {
+    if (sign === 1) await registerExpenseCheque(tx, ctx, doc);
+    else await cancelExpenseCheque(tx, ctx, doc);
+  }
   if (docType === "PURCHASE_ORDER" && sign === 1 && doc.requestId) {
     await tx.purchaseRequest.update({ where: { id: doc.requestId }, data: { status: "ORDERED" } });
   }
@@ -430,9 +440,9 @@ export async function reverseDocument(tx: Tx, ctx: Ctx, docType: DocType, id: st
     const later = await tx.clientExtract.count({ where: { projectId: doc.projectId, status: "POSTED", date: { gt: doc.date }, id: { not: id } } });
     if (later) throw unprocessable("Later extracts exist for this project — reverse them first");
   }
-  if (docType === "PAYMENT" && doc.method === "CHEQUE") {
-    const ch = await tx.cheque.findFirst({ where: { paymentId: id, status: { notIn: ["RECEIVED", "ISSUED", "CANCELLED"] } } });
-    if (ch) throw unprocessable(`Cheque ${ch.number} has already moved (${ch.status}) — use the cheque lifecycle (bounce/cancel) instead of reversing the payment`);
+  if ((docType === "PAYMENT" && doc.method === "CHEQUE") || (docType === "EXPENSE" && doc.paymentMethod === "CHEQUE")) {
+    const ch = await tx.cheque.findFirst({ where: { ...(docType === "PAYMENT" ? { paymentId: id } : { expenseId: id }), status: { notIn: ["RECEIVED", "ISSUED", "CANCELLED"] } } });
+    if (ch) throw unprocessable(`Cheque ${ch.number} has already moved (${ch.status}) — use the cheque lifecycle (bounce/cancel) instead of reversing the ${docType === "PAYMENT" ? "payment" : "expense"}`);
   }
   if (docType === "CUSTODY") {
     const used = await tx.expense.count({ where: { custodyId: id, status: { in: ["POSTED", "APPROVED", "PENDING_APPROVAL"] } } });

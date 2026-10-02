@@ -41,6 +41,10 @@ function checkMethod(data: any, partial = false) {
   if ((m === "BANK" || (m === "CHEQUE" && data.type !== "CLIENT_RECEIPT")) && !data.bankAccountId && !partial) throw badRequest("Bank account is required");
   if (m === "CUSTODY" && !data.custodyId && !partial) throw badRequest("Custody is required");
   if (m === "CREDIT" && !data.supplierId && !partial) throw badRequest("Supplier is required for credit purchases");
+  if (m === "CHEQUE" && data.paymentMethod && !partial) {
+    if (!data.chequeNumber) throw badRequest("Cheque number is required");
+    if (!data.supplierId) throw badRequest("Payee (supplier) is required for expenses paid by cheque");
+  }
 }
 
 const expenseFields = {
@@ -55,6 +59,8 @@ const expenseFields = {
   supplierId: optId,
   employeeId: optId,
   custodyId: optId,
+  chequeNumber: optStr,
+  chequeDueDate: optDate,
   costCenterId: optId,
   documentId: optId,
   description: optStr,
@@ -343,7 +349,8 @@ export const treasuryResources: Record<string, ResourceDef> = {
       const entries = await tx.journalEntry.findMany({ where: { id: { in: jeIds } }, select: { id: true, number: true } });
       return { entryNumbers: Object.fromEntries(entries.map((e) => [e.id, e.number])) };
     },
-    canDelete: async (_tx, row) => (row.ledger ? "Cheques with accounting entries cannot be deleted — cancel them instead" : row.paymentId ? "Cheque is linked to a payment — reverse the payment instead" : null),
+    canDelete: async (_tx, row) =>
+      row.ledger ? "Cheques with accounting entries cannot be deleted — cancel them instead" : row.paymentId ? "Cheque is linked to a payment — reverse the payment instead" : row.expenseId ? "Cheque is linked to an expense — reverse the expense instead" : null,
     actions: Object.fromEntries(
       (["collect", "deposit", "clear", "bounce", "cancel", "represent"] as ChequeAction[]).map((a) => [
         a,

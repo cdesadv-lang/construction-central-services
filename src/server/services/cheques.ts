@@ -107,6 +107,47 @@ export async function cancelPaymentCheque(tx: Tx, ctx: Ctx | null, pay: any) {
   }
 }
 
+/**
+ * Called when an expense paid by cheque is posted: registers the issued cheque (status ISSUED). The expense entry
+ * (Dr expense / Cr Notes Payable) is the cheque's initial entry; clearing moves the bank, bounce/cancel restore the
+ * payable on the payee (supplier).
+ */
+export async function registerExpenseCheque(tx: Tx, ctx: Ctx | null, exp: any) {
+  const posted = await tx.expense.findUnique({ where: { id: exp.id }, select: { journalEntryId: true } });
+  const supplier = exp.supplierId ? await tx.supplier.findUnique({ where: { id: exp.supplierId } }) : null;
+  return tx.cheque.create({
+    data: {
+      companyId: exp.companyId,
+      number: exp.chequeNumber || exp.number,
+      type: "ISSUED",
+      status: "ISSUED",
+      bankAccountId: exp.bankAccountId,
+      amount: exp.amount,
+      currency: exp.currency ?? "EGP",
+      exchangeRate: exp.exchangeRate ?? 1,
+      issueDate: exp.date,
+      dueDate: exp.chequeDueDate ?? exp.date,
+      partyName: supplier?.name ?? exp.description ?? exp.number,
+      partyType: "SUPPLIER",
+      partyId: exp.supplierId,
+      counterAccountId: await accountIdByKey(tx, exp.companyId, "AP_SUPPLIERS"),
+      expenseId: exp.id,
+      journalEntryId: posted?.journalEntryId ?? null,
+      createdById: ctx?.user.id ?? null,
+      notes: `Expense ${exp.number}`,
+      movements: { create: { companyId: exp.companyId, toStatus: "ISSUED", date: exp.date, journalEntryId: posted?.journalEntryId ?? null, notes: `Expense ${exp.number}`, createdById: ctx?.user.id ?? null } },
+    } as any,
+  });
+}
+
+/** Called when a cheque expense is reversed before the cheque moved: the expense's reversing entry unwinds the ledger. */
+export async function cancelExpenseCheque(tx: Tx, ctx: Ctx | null, exp: any) {
+  const cheques = await tx.cheque.findMany({ where: { expenseId: exp.id, status: "ISSUED" } });
+  for (const ch of cheques) {
+    await tx.cheque.update({ where: { id: ch.id }, data: { status: "CANCELLED", movements: { create: { companyId: ch.companyId, fromStatus: ch.status, toStatus: "CANCELLED", date: new Date(), notes: `Expense ${exp.number} reversed`, createdById: ctx?.user.id ?? null } } } });
+  }
+}
+
 /** Stand-alone cheque (not created from a payment): posts its initial entry against counterAccountId. */
 export async function createStandaloneCheque(tx: Tx, ctx: Ctx, data: any) {
   if (!data.counterAccountId) throw badRequest("Counter account is required (the account this cheque settles)");

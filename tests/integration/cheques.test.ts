@@ -114,3 +114,44 @@ describe("cheque lifecycle", () => {
     expect(c.status).toBe(422); // initial entry would land in closed March 2026
   });
 });
+
+describe("expenses paid by cheque go through the cheque lifecycle", () => {
+  const chequeExpense = async (amount: number) => {
+    const e = await create(acc, "expenses", { companyId: nileId, type: "EQUIPMENT", date: "2026-09-12", amount, paymentMethod: "CHEQUE", bankAccountId: bank.id, chequeNumber: num(), chequeDueDate: "2026-09-20", supplierId: supplier.id, description: "صيانة بشيك" });
+    await submitApprovePost(acc, "expenses", e.id);
+    return e;
+  };
+
+  it("posting credits Notes Payable (not the bank) and registers an ISSUED cheque; clearing moves the bank", async () => {
+    const [np0, bk0] = await Promise.all([ledgerBalance(K.NOTES_PAYABLE), ledgerBalance(bank.accountId)]);
+    await expectApiError(create(acc, "expenses", { companyId: nileId, type: "EQUIPMENT", date: "2026-09-12", amount: 10, paymentMethod: "CHEQUE", bankAccountId: bank.id, supplierId: supplier.id }), 400); // cheque number required
+    const e = await chequeExpense(7_000);
+    expect(await ledgerBalance(K.NOTES_PAYABLE)).toBeCloseTo(np0 - 7_000);
+    expect(await ledgerBalance(bank.accountId)).toBeCloseTo(bk0); // bank untouched until the cheque clears
+    const ch = await prisma.cheque.findFirstOrThrow({ where: { expenseId: e.id } });
+    expect(ch.type).toBe("ISSUED");
+    expect(ch.status).toBe("ISSUED");
+    expect(Number(ch.amount)).toBe(7_000);
+    expect(ch.partyId).toBe(supplier.id);
+    await act(treasury, "cheques", ch.id, "clear", { date: "2026-09-21" });
+    expect(await ledgerBalance(K.NOTES_PAYABLE)).toBeCloseTo(np0);
+    expect(await ledgerBalance(bank.accountId)).toBeCloseTo(bk0 - 7_000);
+    // a cleared cheque cannot be undone by reversing the expense
+    const cfo = await ctxFor("cfo@ccs.local");
+    await expectApiError(act(cfo, "expenses", e.id, "reverse", { reason: "x" }), 422);
+  });
+
+  it("bouncing restores the payable on the supplier; reversing the expense before the cheque moves cancels the cheque", async () => {
+    const ap0 = await ledgerBalance(K.AP_SUPPLIERS, supplier.id);
+    const e1 = await chequeExpense(3_000);
+    const ch1 = await prisma.cheque.findFirstOrThrow({ where: { expenseId: e1.id } });
+    await act(treasury, "cheques", ch1.id, "bounce", { date: "2026-09-22" });
+    expect(await ledgerBalance(K.AP_SUPPLIERS, supplier.id)).toBeCloseTo(ap0 - 3_000); // we owe the supplier again
+    const np0 = await ledgerBalance(K.NOTES_PAYABLE);
+    const e2 = await chequeExpense(1_500);
+    const cfo = await ctxFor("cfo@ccs.local");
+    await act(cfo, "expenses", e2.id, "reverse", { reason: "cheque voided" });
+    expect((await prisma.cheque.findFirstOrThrow({ where: { expenseId: e2.id } })).status).toBe("CANCELLED");
+    expect(await ledgerBalance(K.NOTES_PAYABLE)).toBeCloseTo(np0);
+  });
+});
