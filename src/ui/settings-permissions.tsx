@@ -53,7 +53,7 @@ export function PermissionsPanel() {
 }
 
 export function WorkflowsPanel() {
-  const { t, can, companies, user } = useApp();
+  const { t, can, companies, user, dir } = useApp();
   const [d, setD] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [edit, setEdit] = useState<any>(null);
@@ -86,7 +86,7 @@ export function WorkflowsPanel() {
               {wfs.length ? wfs.map((w: any) => (
                 <div key={w.id} className="mb-1 text-sm">
                   <span className="me-2 text-xs text-slate-500">{w.companyId ? w.company?.name : t("c.global")}{w.isActive ? "" : " (off)"}:</span>
-                  {w.steps.map((s: any) => t("e." + s.role)).join(" ← ") || "—"}
+                  {w.steps.map((s: any) => t("e." + s.role)).join(dir === "rtl" ? " ← " : " → ") || "—"}
                 </div>
               )) : <div className="text-xs text-slate-400">— (auto-approve)</div>}
             </div>

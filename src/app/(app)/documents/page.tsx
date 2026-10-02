@@ -17,9 +17,11 @@ export default function Documents() {
   const [busy, setBusy] = useState(false);
   const file = useRef<HTMLInputElement>(null);
   useEffect(() => { if (companyId) setCompany(companyId); }, [companyId]);
+  const allowed = can("documents");
   const load = useCallback(() => {
+    if (!allowed) return;
     api.get(`/api/documents${qs({ companyId, q, pageSize: 200 })}`).then((r) => setItems(r.items)).catch((e) => setError(e.message));
-  }, [companyId, q]);
+  }, [companyId, q, allowed]);
   useEffect(load, [load]);
   if (!can("documents")) return <NoAccess />;
   const upload = async (e: React.FormEvent) => {

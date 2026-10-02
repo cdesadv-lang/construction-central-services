@@ -18,11 +18,13 @@ export default function AuditLog() {
   const [error, setError] = useState<string | null>(null);
   const [sel, setSel] = useState<any>(null);
   const params = { companyId, page, pageSize: 50, ...f };
+  const allowed = can("audit");
   const load = useCallback(() => {
+    if (!allowed) return;
     setItems(null);
     api.get(`/api/audit-logs${qs(params)}`).then((r) => { setItems(r.items); setTotal(r.total); }).catch((e) => setError(e.message));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(params)]);
+  }, [JSON.stringify(params), allowed]);
   useEffect(load, [load]);
   if (!can("audit")) return <NoAccess />;
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => { setPage(1); setF((x) => ({ ...x, [k]: e.target.value })); };

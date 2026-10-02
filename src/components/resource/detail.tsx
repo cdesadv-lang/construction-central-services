@@ -56,7 +56,7 @@ export function JournalLines({ entry }: { entry: AnyRow }) {
 }
 
 export function ApprovalHistory({ requests }: { requests: AnyRow[] }) {
-  const { t, lang } = useApp();
+  const { t, lang, dir } = useApp();
   if (!requests?.length) return null;
   return (
     <div className="mt-5">
@@ -70,7 +70,7 @@ export function ApprovalHistory({ requests }: { requests: AnyRow[] }) {
               <span className="text-slate-500">
                 {t("c.step")} {Math.min(r.currentStep, r.totalSteps)}/{r.totalSteps}
               </span>
-              <span className="text-slate-600">{(r.steps as AnyRow[]).map((s) => t("e." + s.role)).join(" ← ")}</span>
+              <span className="text-slate-600">{(r.steps as AnyRow[]).map((s) => t("e." + s.role)).join(dir === "rtl" ? " ← " : " → ")}</span>
             </div>
             {r.actions.map((a: AnyRow) => (
               <div key={a.id} className="flex flex-wrap items-center gap-2 border-t border-slate-100 py-1 text-sm">

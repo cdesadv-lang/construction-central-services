@@ -13,9 +13,9 @@ export default function Page() {
     <TabbedPage
       title={t("nav.accounts")}
       tabs={[
-        { key: "tree", label: t("t.tree"), render: () => <AccountTree /> },
-        { key: "list", label: t("t.accounts"), render: () => <ResourcePage cfg={accounts} embedded /> },
-        { key: "cc", label: t("t.costCenters"), render: () => <ResourcePage cfg={cc} embedded /> },
+        { key: "tree", label: t("t.tree"), module: "accounting", render: () => <AccountTree /> },
+        { key: "list", label: t("t.accounts"), module: "accounting", render: () => <ResourcePage cfg={accounts} embedded /> },
+        { key: "cc", label: t("t.costCenters"), module: "accounting", render: () => <ResourcePage cfg={cc} embedded /> },
       ]}
     />
   );
