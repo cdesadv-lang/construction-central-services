@@ -154,6 +154,9 @@ export interface EntryInput {
   reversalOfId?: string | null;
   /** internal only: year-end closing entries are posted into the closed last period of the year */
   skipPeriodCheck?: boolean;
+  /** informational: currency/rate the entry was entered in (lines already carry EGP amounts + fx tags) */
+  currency?: string | null;
+  exchangeRate?: number | string | Prisma.Decimal | null;
 }
 
 /** Journal sources produced by year-end closing; excluded from profit & loss reporting (they zero revenue/expense accounts). */
@@ -222,6 +225,8 @@ export async function createJournalEntry(tx: Tx, ctx: Ctx | null, input: EntryIn
       sourceType: input.sourceType ?? null,
       sourceId: input.sourceId ?? null,
       reversalOfId: input.reversalOfId ?? null,
+      currency: input.currency || "EGP",
+      exchangeRate: D(input.exchangeRate ?? 1),
       totalDebit: totals.totalDebit,
       totalCredit: totals.totalCredit,
       createdById: ctx?.user.id ?? null,
@@ -236,7 +241,7 @@ export async function createJournalEntry(tx: Tx, ctx: Ctx | null, input: EntryIn
   return entry;
 }
 
-export async function updateDraftJournalEntry(tx: Tx, ctx: Ctx, id: string, input: Omit<EntryInput, "companyId" | "status">) {
+export async function updateDraftJournalEntry(tx: Tx, ctx: Ctx, id: string, input: Omit<EntryInput, "companyId" | "status" | "skipPeriodCheck">) {
   const existing = await tx.journalEntry.findUnique({ where: { id }, include: { lines: true } });
   if (!existing) throw notFound();
   if (existing.status !== "DRAFT") throw unprocessable("Only draft entries can be edited");
@@ -250,6 +255,8 @@ export async function updateDraftJournalEntry(tx: Tx, ctx: Ctx, id: string, inpu
       date: input.date,
       description: input.description,
       projectId: input.projectId || null,
+      currency: input.currency || "EGP",
+      exchangeRate: D(input.exchangeRate ?? 1),
       totalDebit: totals.totalDebit,
       totalCredit: totals.totalCredit,
       lines: { deleteMany: {}, create: input.lines.map((l) => lineData(existing.companyId, input.projectId, l)) },
@@ -294,6 +301,8 @@ export async function reverseJournalEntry(tx: Tx, ctx: Ctx | null, id: string, r
     sourceId: e.sourceId,
     reversalOfId: e.id,
     skipPeriodCheck: opts.skipPeriodCheck,
+    currency: e.currency,
+    exchangeRate: e.exchangeRate,
     lines: e.lines.map((l) => ({
       accountId: l.accountId,
       debit: l.credit,

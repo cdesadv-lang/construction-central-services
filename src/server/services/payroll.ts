@@ -71,7 +71,15 @@ export async function savePayrollSettings(ctx: Ctx, companyId: string, body: unk
   });
 }
 
-export async function buildPayrollLines(tx: Tx, companyId: string, month: string, projectId?: string | null, excludePayrollId?: string) {
+/**
+ * Builds payroll lines for the month. A payroll is run per salary currency: only employees paid in `fx.currency`
+ * are included; amounts are in that currency, while social insurance and salary tax are computed on the EGP
+ * equivalent at `fx.rate` (the statutory limits and brackets are in EGP) and converted back.
+ */
+export async function buildPayrollLines(tx: Tx, companyId: string, month: string, projectId?: string | null, excludePayrollId?: string, fx: { currency?: string; rate?: unknown } = {}) {
+  const currency = fx.currency ?? "EGP";
+  const rate = currency === "EGP" ? D(1) : D(fx.rate as never);
+  if (!rate.greaterThan(0)) throw unprocessable(`Exchange rate for ${currency} must be greater than zero`);
   const [y, m] = month.split("-").map(Number);
   const from = new Date(Date.UTC(y, m - 1, 1));
   const to = new Date(Date.UTC(y, m, 0, 23, 59, 59));
@@ -81,7 +89,7 @@ export async function buildPayrollLines(tx: Tx, companyId: string, month: string
   });
   const done = new Set(already.map((a) => a.employeeId));
   const employees = await tx.employee.findMany({
-    where: { companyId, status: { in: ["ACTIVE", "ON_LEAVE"] }, ...(projectId ? { projectId } : {}) },
+    where: { companyId, status: { in: ["ACTIVE", "ON_LEAVE"] }, salaryCurrency: currency, ...(projectId ? { projectId } : {}) },
     include: { allocations: true, adjustments: { where: { month } }, attendance: { where: { date: { gte: from, lte: to } } } },
     orderBy: { code: "asc" },
   });
@@ -95,14 +103,20 @@ export async function buildPayrollLines(tx: Tx, companyId: string, month: string
     const absentDays = e.attendance.filter((a) => a.status === "ABSENT").length;
     const overtime = r2(adj("OVERTIME").plus(otHours.mul(hourly).mul(rules.overtimeMultiplier)));
     const deductions = r2(adj("DEDUCTION").plus(D(e.basicSalary).div(rules.daysPerMonth).mul(absentDays)));
-    const c = calcPayrollLine({
-      basic: e.basicSalary,
-      allowances: e.allowances,
-      overtime,
-      bonuses: adj("BONUS"),
-      deductions,
-      insuranceSalary: e.insuranceSalary,
+    const egp = (v: unknown) => r2(D(v as never).mul(rate));
+    const back = (v: unknown) => (currency === "EGP" ? r2(D(v as never)) : r2(D(v as never).div(rate)));
+    const ce = calcPayrollLine({
+      basic: egp(e.basicSalary),
+      allowances: egp(e.allowances),
+      overtime: egp(overtime),
+      bonuses: egp(adj("BONUS")),
+      deductions: egp(deductions),
+      insuranceSalary: egp(e.insuranceSalary),
     }, rules);
+    // amounts in the payroll currency; gross/deductions stay exact, statutory items are converted back from EGP
+    const gross = r2(D(e.basicSalary).plus(D(e.allowances)).plus(overtime).plus(adj("BONUS")));
+    const c = { ...ce, gross, deductions: r2(deductions), insurance: back(ce.insurance), companyInsurance: back(ce.companyInsurance), tax: back(ce.tax) };
+    c.net = r2(c.gross.minus(c.deductions).minus(c.insurance).minus(c.tax));
     const allocations = e.allocations.length
       ? e.allocations.map((a) => ({ projectId: a.projectId, percent: Number(a.percent) }))
       : [{ projectId: e.projectId ?? null, percent: 100 }];

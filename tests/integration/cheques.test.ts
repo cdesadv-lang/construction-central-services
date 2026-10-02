@@ -83,7 +83,7 @@ describe("cheque lifecycle", () => {
   });
 
   it("client receipt by cheque: hits notes receivable (not the bank); bounce reduces the extract's paid amount; payment reversal is blocked once the cheque moved", async () => {
-    const ex = await prisma.clientExtract.findFirstOrThrow({ where: { companyId: nileId, status: "POSTED" }, orderBy: { date: "desc" } });
+    const ex = await prisma.clientExtract.findFirstOrThrow({ where: { companyId: nileId, status: "POSTED", currency: "EGP" }, orderBy: { date: "desc" } });
     const remaining = Number(ex.netAmount) - Number(ex.paidAmount);
     expect(remaining).toBeGreaterThan(1000);
     const bk0 = await ledgerBalance(bank.accountId);
@@ -102,7 +102,7 @@ describe("cheque lifecycle", () => {
   });
 
   it("reversing a cheque payment while the cheque is still in hand cancels the cheque", async () => {
-    const ex = await prisma.clientExtract.findFirstOrThrow({ where: { companyId: nileId, status: "POSTED" }, orderBy: { date: "desc" } });
+    const ex = await prisma.clientExtract.findFirstOrThrow({ where: { companyId: nileId, status: "POSTED", currency: "EGP" }, orderBy: { date: "desc" } });
     const pay = await create(treasury, "payments", { companyId: nileId, type: "CLIENT_RECEIPT", date: "2026-09-15", amount: 500, method: "CHEQUE", chequeNumber: num(), clientExtractId: ex.id });
     await submitApprovePost(treasury, "payments", pay.id);
     await act(await ctxFor("cfo@ccs.local"), "payments", pay.id, "reverse", { reason: "wrong" });

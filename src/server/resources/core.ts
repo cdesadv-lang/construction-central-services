@@ -5,7 +5,8 @@ import { D, r2 } from "@/lib/money";
 import { badRequest, unprocessable } from "@/lib/errors";
 import { createJournalEntry, updateDraftJournalEntry } from "../services/accounting";
 import type { ResourceDef } from "./engine";
-import { optDate, optId, optStr, money, pct, reqDate, reqId, reqStr, optMoney, bool } from "./z";
+import { optDate, optId, optStr, money, pct, reqDate, reqId, reqStr, optMoney, bool, currency, fxFields } from "./z";
+import { convertManualLines, linesInEntryCurrency, resolveDocFx } from "../services/fx";
 
 const ledgerByProject = async (projectIds: string[]) => {
   if (!projectIds.length) return new Map<string, { revenue: number; cost: number }>();
@@ -43,6 +44,8 @@ const projectFields = {
   clientTaxPct: pct.optional(),
   clientInsurancePct: pct.optional(),
   status: z.enum(["PLANNING", "ACTIVE", "SUSPENDED", "COMPLETED", "CLOSED"]).optional(),
+  /** contract / billing currency (client extracts are issued in it) */
+  currency,
 };
 
 export const coreResources: Record<string, ResourceDef> = {
@@ -60,6 +63,11 @@ export const coreResources: Record<string, ResourceDef> = {
     orderBy: { code: "asc" },
     afterCreate: async (tx, _ctx, row) => {
       await tx.costCenter.create({ data: { companyId: row.companyId, code: `CC-${row.code}`, name: `مركز تكلفة ${row.name}`, projectId: row.id } });
+    },
+    prepareUpdate: async (tx, _ctx, existing, data) => {
+      if (data.currency && data.currency !== existing.currency && (await tx.clientExtract.count({ where: { projectId: existing.id, status: { not: "CANCELLED" } } })))
+        throw unprocessable("The project currency cannot change once client extracts exist");
+      return data;
     },
     decorate: async (rows) => {
       const m = await ledgerByProject(rows.map((r) => r.id));
@@ -183,6 +191,7 @@ export const coreResources: Record<string, ResourceDef> = {
           }),
         )
         .min(2),
+      ...fxFields,
     }),
     update: z
       .object({
@@ -190,6 +199,7 @@ export const coreResources: Record<string, ResourceDef> = {
         description: reqStr,
         projectId: optId,
         lines: z.array(z.object({ accountId: reqId, debit: optMoney, credit: optMoney, costCenterId: optId, projectId: optId, description: optStr, partyType: optStr, partyId: optId })).min(2),
+        ...fxFields,
       })
       .partial(),
     search: ["number", "description"],
@@ -203,15 +213,34 @@ export const coreResources: Record<string, ResourceDef> = {
       lines: { include: { account: { select: { code: true, name: true, nameEn: true } }, costCenter: { select: { code: true, name: true } }, project: { select: { code: true, name: true } } } },
     },
     orderBy: [{ date: "desc" }, { number: "desc" }],
-    customCreate: async (tx, ctx, data) =>
-      createJournalEntry(tx, ctx, { companyId: data.companyId, date: data.date, description: data.description, projectId: data.projectId, lines: data.lines, status: "DRAFT" }),
-    customUpdate: async (tx, ctx, existing, data) =>
-      updateDraftJournalEntry(tx, ctx, existing.id, {
-        date: data.date ?? existing.date,
+    // lines are entered in the entry currency (default EGP); foreign entries are converted to EGP at the entry rate
+    customCreate: async (tx, ctx, data) => {
+      const fx = await resolveDocFx(tx, data.companyId, { currency: data.currency, exchangeRate: data.exchangeRate, date: data.date });
+      return createJournalEntry(tx, ctx, {
+        companyId: data.companyId,
+        date: data.date,
+        description: data.description,
+        projectId: data.projectId,
+        lines: convertManualLines(data.lines, fx.currency, fx.exchangeRate),
+        currency: fx.currency,
+        exchangeRate: fx.exchangeRate,
+        status: "DRAFT",
+      });
+    },
+    customUpdate: async (tx, ctx, existing, data) => {
+      const date = data.date ?? existing.date;
+      const fx = await resolveDocFx(tx, existing.companyId, { currency: data.currency ?? existing.currency, exchangeRate: data.exchangeRate, date }, existing);
+      const rate = fx.exchangeRate ?? existing.exchangeRate;
+      const lines = data.lines ?? linesInEntryCurrency(await tx.journalLine.findMany({ where: { entryId: existing.id } }));
+      return updateDraftJournalEntry(tx, ctx, existing.id, {
+        date,
         description: data.description ?? existing.description,
         projectId: data.projectId === undefined ? existing.projectId : data.projectId,
-        lines: data.lines ?? (await tx.journalLine.findMany({ where: { entryId: existing.id } })),
-      }),
+        lines: convertManualLines(lines, fx.currency, rate),
+        currency: fx.currency,
+        exchangeRate: rate,
+      });
+    },
     canDelete: async (_tx, row) => (row.sourceType ? "System-generated entries cannot be deleted" : null),
   },
 };

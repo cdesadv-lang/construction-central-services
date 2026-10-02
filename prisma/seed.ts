@@ -610,6 +610,65 @@ async function main() {
     const usdPay = await create(acc, "payments", { ...C, type: "SUPPLIER_PAYMENT", date: "2026-08-20", amount: 12_000, currency: "USD", method: "BANK", bankAccountId: usdBank.id, supplierInvoiceId: usdInv.id, description: "سداد فاتورة الاستيراد من الحساب الدولاري" });
     await post("payments", usdPay.id, acc);
 
+    // USD subcontract (foreign specialist): extract at month end, partial payment from the USD account
+    const usdSc = await create(acc, "subcontracts", {
+      ...C, contractorId: contractors[1 % contractors.length].id, projectId: active[0].id, scope: "توريد وتركيب أنظمة تحكم مستوردة (بالدولار)", contractValue: 80_000, currency: "USD",
+      retentionPct: 5, taxPct: 1, insurancePct: 0, advanceRecoveryPct: 0, startDate: "2026-07-01", endDate: "2026-12-31",
+    });
+    const usdEx = await create(extractCtx, "contractor-extracts", { ...C, contractId: usdSc.id, periodFrom: "2026-07-01", periodTo: "2026-08-31", date: "2026-08-31", cumulativeGross: 30_000, description: "مستخلص رقم 1 (بالدولار)" });
+    await post("contractor-extracts", usdEx.id, extractCtx);
+    const usdExFull = await prisma.contractorExtract.findUniqueOrThrow({ where: { id: usdEx.id } });
+    const usdExPay = await create(extractCtx, "payments", { ...C, type: "CONTRACTOR_PAYMENT", date: "2026-09-15", amount: Math.round(Number(usdExFull.netAmount) * 0.5), currency: "USD", method: "BANK", bankAccountId: usdBank.id, contractorExtractId: usdEx.id, description: `سداد جزئي لمستخلص ${usdExFull.number} بالدولار` });
+    await post("payments", usdExPay.id, extractCtx);
+
+    // USD petty cash: funded from the USD account, a USD custody with a USD expense (custody still open)
+    const usdCash = await create(admin, "cash-boxes", { ...C, name: "خزينة الدولار", keeper: "أمين الخزينة", currency: "USD" });
+    const usdW = await create(treasuryCtx, "treasury-transactions", { ...C, kind: "BANK_WITHDRAWAL", date: "2026-08-03", amount: 5_000, currency: "USD", bankAccountId: usdBank.id, cashBoxId: usdCash.id, description: "سحب نقدية دولارية" });
+    await post("treasury-transactions", usdW.id, treasuryCtx);
+    const usdCust = await create(acc, "custodies", { ...C, employeeId: emps[0].id, amount: 2_000, currency: "USD", date: "2026-08-05", purpose: "عهدة سفر لمعاينة معدات بالخارج (بالدولار)", cashBoxId: usdCash.id, projectId: active[0].id });
+    await post("custodies", usdCust.id, acc);
+    const usdCustEx = await create(acc, "expenses", { ...C, projectId: active[0].id, type: "TRANSPORT", date: "2026-08-12", amount: 850, currency: "USD", paymentMethod: "CUSTODY", custodyId: usdCust.id, description: "تذاكر سفر وإقامة (بالدولار)" });
+    await post("expenses", usdCustEx.id, acc);
+
+    // Manual USD journal entry (accrual entered in USD, converted at the month rate)
+    const usdJe = await create(acc, "journal-entries", {
+      ...C, date: "2026-08-25", currency: "USD", description: "استحقاق رسوم فحص فني لمعدات مستوردة (بالدولار)", projectId: active[0].id,
+      lines: [
+        { accountId: await accountIdByKey(prisma, co.id, "COST_EQUIPMENT"), debit: 1_500, projectId: active[0].id },
+        { accountId: apId, credit: 1_500, partyType: "SUPPLIER", partyId: suppliers[1 % suppliers.length].id },
+      ],
+    });
+    await post("journal-entries", usdJe.id, acc);
+
+    if (co.code === "NILE") {
+      // Expat engineer paid in USD: separate USD payroll for August, paid from the USD account
+      const expat = await create(hrCtx, "employees", {
+        ...C, name: "John Carter", positionId: positions.get(s.employees[0][1]).id, departmentId: deps[0].id, projectId: active[0].id, hireDate: "2026-06-01",
+        salaryCurrency: "USD", basicSalary: 3_000, allowances: 500, insuranceSalary: 0, nationalId: "P-US-55120034",
+      });
+      const usdPr = await create(hrCtx, "payrolls", { ...C, month: "2026-08", currency: "USD" });
+      await post("payrolls", usdPr.id, hrCtx);
+      const usdPrFull = await prisma.payroll.findUniqueOrThrow({ where: { id: usdPr.id } });
+      const usdSal = await create(treasuryCtx, "treasury-transactions", {
+        ...C, kind: "BANK_PAYMENT", date: "2026-08-31", amount: Number(usdPrFull.totalNet), currency: "USD", bankAccountId: usdBank.id, counterAccountId: await accountIdByKey(prisma, co.id, "SALARIES_PAYABLE"),
+        description: "صرف رواتب الدولار - أغسطس 2026",
+      });
+      await post("treasury-transactions", usdSal.id, treasuryCtx);
+      void expat;
+
+      // Project billed in USD to a foreign-funded client: client extract + receipt into the USD account
+      const usdProject = await create(admin, "projects", {
+        ...C, code: "NIL-P04", name: "محطة طاقة شمسية 5 ميجاوات - تمويل دولي (بالدولار)", clientId: clients[2].id, contractValue: 2_400_000, currency: "USD", budget: 1_950_000,
+        startDate: "2026-07-01", endDate: "2027-06-30", projectManager: "م. كريم عبد العزيز", consultant: "Lahmeyer International", location: "بنبان - أسوان", status: "ACTIVE", completionPct: 8,
+        clientRetentionPct: 5, clientTaxPct: 1, clientInsurancePct: 0,
+      });
+      const usdCe = await create(extractCtx, "client-extracts", { ...C, projectId: usdProject.id, periodFrom: "2026-07-01", periodTo: "2026-08-20", date: "2026-08-20", cumulativeWork: 190_000, description: "مستخلص رقم 1 - محطة الطاقة الشمسية (بالدولار)" });
+      await post("client-extracts", usdCe.id, extractCtx);
+      const usdCeFull = await prisma.clientExtract.findUniqueOrThrow({ where: { id: usdCe.id } });
+      const usdRcv = await create(treasuryCtx, "payments", { ...C, type: "CLIENT_RECEIPT", date: "2026-09-10", amount: Number(usdCeFull.netAmount), currency: "USD", method: "BANK", bankAccountId: usdBank.id, clientExtractId: usdCe.id, description: `تحصيل مستخلص ${usdCeFull.number} بالدولار` });
+      await post("payments", usdRcv.id, treasuryCtx);
+    }
+
     // Items awaiting approval (to populate approval inbox) and drafts
     const pendingJe = await create(acc, "journal-entries", {
       ...C, date: "2026-09-25", description: "قيد تسوية - استحقاق إيجار معدات سبتمبر", projectId: active[0].id,

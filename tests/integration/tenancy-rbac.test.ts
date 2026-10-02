@@ -30,7 +30,7 @@ describe("multi-tenant isolation", () => {
   it("cannot read a record of company B by id (404, no existence leak)", async () => {
     const sup = await prisma.supplier.findFirstOrThrow({ where: { companyId: modernId } });
     await expectApiError(get(accNile, "suppliers", sup.id), 404);
-    const ex = await prisma.contractorExtract.findFirstOrThrow({ where: { companyId: modernId } });
+    const ex = await prisma.contractorExtract.findFirstOrThrow({ where: { companyId: modernId, currency: "EGP" } });
     await expectApiError(get(accNile, "contractor-extracts", ex.id), 404);
     await expectApiError(update(accNile, "suppliers", sup.id, { name: "hijack" }), 404);
   });
@@ -43,7 +43,7 @@ describe("multi-tenant isolation", () => {
 
   it("cannot reference another company's records from own company (400)", async () => {
     const modernProject = await prisma.project.findFirstOrThrow({ where: { companyId: modernId } });
-    const nileCash = await prisma.cashBox.findFirstOrThrow({ where: { companyId: nileId } });
+    const nileCash = await prisma.cashBox.findFirstOrThrow({ where: { companyId: nileId, currency: "EGP" } });
     await expectApiError(
       create(accNile, "expenses", { companyId: nileId, projectId: modernProject.id, type: "OTHER", date: "2026-09-01", amount: 10, paymentMethod: "CASH", cashBoxId: nileCash.id }),
       400,

@@ -16,7 +16,7 @@ beforeAll(async () => {
 
 describe("journal entries — double entry & posting", () => {
   it("rejects an unbalanced entry", async () => {
-    const cash = await prisma.cashBox.findFirstOrThrow({ where: { companyId: nileId } });
+    const cash = await prisma.cashBox.findFirstOrThrow({ where: { companyId: nileId, currency: "EGP" } });
     const rev = await accountIdByKey(prisma, nileId, "OTHER_INCOME");
     await expectApiError(
       create(acc, "journal-entries", { companyId: nileId, date: "2026-09-01", description: "bad", lines: [{ accountId: cash.accountId, debit: 100 }, { accountId: rev, credit: 90 }] }),
@@ -34,7 +34,7 @@ describe("journal entries — double entry & posting", () => {
   });
 
   it("draft/approved entries do not affect the ledger; only posted entries do; reversal nets to zero", async () => {
-    const cash = await prisma.cashBox.findFirstOrThrow({ where: { companyId: nileId }, orderBy: { code: "asc" } });
+    const cash = await prisma.cashBox.findFirstOrThrow({ where: { companyId: nileId, currency: "EGP" }, orderBy: { code: "asc" } });
     const income = await accountIdByKey(prisma, nileId, "OTHER_INCOME");
     const before = await trialBalance(cfo, { companyId: nileId });
     const row = (tb: typeof before, code: string) => tb.rows.find((r) => r.code === code) as Record<string, number> | undefined;

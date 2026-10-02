@@ -64,13 +64,13 @@ export function buildConfigs(t: T): Record<string, ResourceConfig> {
     projects: {
       resource: "projects", module: "projects", title: t("t.projects"), entityType: "project",
       columns: [
-        { key: "code" }, { key: "name" }, { key: "client.name", label: t("f.client") }, { key: "contractValue", type: "money", total: true },
+        { key: "code" }, { key: "name" }, { key: "client.name", label: t("f.client") }, fxCol, { key: "contractValue", type: "money", total: true },
         { key: "budget", type: "money", total: true }, { key: "revenue", type: "money", total: true }, { key: "actualCost", type: "money", total: true },
         { key: "profit", type: "money", total: true }, { key: "completionPct", type: "pct" }, { key: "status", type: "status" }, { key: "delayed", type: "bool" },
       ],
       form: [
         { key: "code", placeholder: "AUTO" }, { key: "name", required: true, span: 2 }, { key: "clientId", type: "lookup", lookup: "clients" },
-        { key: "contractValue", type: "money", required: true }, { key: "budget", type: "money" }, { key: "startDate", type: "date" }, { key: "endDate", type: "date" },
+        { key: "contractValue", type: "money", required: true }, { key: "currency", label: t("x.contractCurrency"), type: "select", options: [...CURRENCIES], default: "EGP" }, { key: "budget", type: "money" }, { key: "startDate", type: "date" }, { key: "endDate", type: "date" },
         { key: "projectManager" }, { key: "consultant" }, { key: "location" }, { key: "completionPct", type: "pct", default: 0 },
         { key: "clientRetentionPct", type: "pct", default: 5 }, { key: "clientTaxPct", type: "pct", default: 1 }, { key: "clientInsurancePct", type: "pct", default: 0 },
         { key: "status", type: "select", options: ["PLANNING", "ACTIVE", "SUSPENDED", "COMPLETED", "CLOSED"], default: "PLANNING", required: true },
@@ -116,9 +116,10 @@ export function buildConfigs(t: T): Record<string, ResourceConfig> {
       resource: "journal-entries", module: "journals", title: t("nav.journalEntries"), doc: true, dateFilter: true, entityType: "journalEntry",
       columns: [
         { key: "number", className: "num" }, { key: "date", type: "date" }, { key: "description" }, { key: "project", get: (r) => r.project?.code, label: t("f.project") },
-        { key: "sourceType", type: "enum", get: (r) => r.sourceType ?? "MANUAL" }, { key: "totalDebit", type: "money", total: true }, { key: "totalCredit", type: "money", total: true }, { key: "status", type: "status" },
+        { key: "sourceType", type: "enum", get: (r) => r.sourceType ?? "MANUAL" }, fxCol, { key: "totalDebit", type: "money", total: true }, { key: "totalCredit", type: "money", total: true }, { key: "status", type: "status" },
       ],
-      form: [{ key: "date", type: "date", required: true, default: today }, projectLookup, { key: "description", required: true, span: 3 }],
+      // foreign-currency entries: lines are entered in the entry currency and converted to EGP at the rate
+      form: [{ key: "date", type: "date", required: true, default: today }, projectLookup, ...fxForm, { key: "description", required: true, span: 3 }],
       lines: {
         key: "lines", min: 2, totals: ["debit", "credit"],
         newLine: () => ({ debit: "", credit: "" }),
@@ -129,7 +130,16 @@ export function buildConfigs(t: T): Record<string, ResourceConfig> {
           { key: "costCenterId", type: "lookup", lookup: "cost-centers" },
           { key: "projectId", type: "lookup", lookup: "projects" },
         ],
-        fromRow: (r) => r.lines.map((l: AnyRow) => ({ accountId: l.accountId, description: l.description ?? "", debit: Number(l.debit) || "", credit: Number(l.credit) || "", costCenterId: l.costCenterId ?? "", projectId: l.projectId ?? "", partyType: l.partyType ?? "", partyId: l.partyId ?? "" })),
+        fromRow: (r) =>
+          r.lines.map((l: AnyRow) => {
+            const fx = r.currency && r.currency !== "EGP" && l.fxAmount !== null && l.fxAmount !== undefined;
+            const dr = Number(l.debit) > 0;
+            return {
+              accountId: l.accountId, description: l.description ?? "",
+              debit: fx ? (dr ? Number(l.fxAmount) : "") : Number(l.debit) || "", credit: fx ? (dr ? "" : Number(l.fxAmount)) : Number(l.credit) || "",
+              costCenterId: l.costCenterId ?? "", projectId: l.projectId ?? "", partyType: l.partyType ?? "", partyId: l.partyId ?? "",
+            };
+          }),
         display: [
           { key: "account", get: (l) => `${l.account?.code} - ${l.account?.name}`, label: t("f.account") }, { key: "description" },
           { key: "debit", type: "money", total: true }, { key: "credit", type: "money", total: true },
@@ -145,7 +155,7 @@ export function buildConfigs(t: T): Record<string, ResourceConfig> {
         },
       },
       preview: (v) => <JournalBalance lines={v.lines ?? []} />,
-      filters: [statusFilter, { key: "sourceType", type: "select", options: ["EXPENSE", "SUPPLIER_INVOICE", "PAYMENT", "CONTRACTOR_EXTRACT", "CLIENT_EXTRACT", "PAYROLL", "TREASURY", "CUSTODY", "CUSTODY_SETTLEMENT", "REVERSAL"] }],
+      filters: [statusFilter, { key: "sourceType", type: "select", options: ["EXPENSE", "SUPPLIER_INVOICE", "PAYMENT", "CONTRACTOR_EXTRACT", "CLIENT_EXTRACT", "PAYROLL", "TREASURY", "CUSTODY", "CUSTODY_SETTLEMENT", "CHEQUE", "FX_REVALUATION", "YEAR_END_CLOSE", "REVERSAL"] }],
     },
     suppliers: {
       resource: "suppliers", module: "suppliers", title: t("t.suppliers"), entityType: "supplier",
@@ -184,12 +194,12 @@ export function buildConfigs(t: T): Record<string, ResourceConfig> {
       resource: "subcontracts", module: "contractors", title: t("t.subcontracts"), entityType: "subContract",
       columns: [
         { key: "number" }, { key: "contractor.name", label: t("f.contractor") }, { key: "project", get: (r) => r.project?.code, label: t("f.project") }, { key: "scope" },
-        { key: "contractValue", type: "money", total: true }, { key: "retentionPct", type: "pct" }, { key: "taxPct", type: "pct" }, { key: "insurancePct", type: "pct" },
+        fxCol, { key: "contractValue", type: "money", total: true }, { key: "retentionPct", type: "pct" }, { key: "taxPct", type: "pct" }, { key: "insurancePct", type: "pct" },
         { key: "executed", type: "money", total: true }, { key: "executedPct", type: "pct" }, { key: "paid", type: "money", total: true }, { key: "remaining", type: "money", total: true }, { key: "remainingWork", type: "money", total: true },
       ],
       form: [
         { key: "number", placeholder: "AUTO" }, { key: "contractorId", type: "lookup", lookup: "contractors", required: true }, { ...projectLookup, required: true },
-        { key: "scope", required: true, span: 3 }, { key: "contractValue", type: "money", required: true }, { key: "retentionPct", type: "pct", default: 5, required: true },
+        { key: "scope", required: true, span: 3 }, { key: "contractValue", type: "money", required: true }, { key: "currency", label: t("x.contractCurrency"), type: "select", options: [...CURRENCIES], default: "EGP" }, { key: "retentionPct", type: "pct", default: 5, required: true },
         { key: "taxPct", type: "pct", default: 1, required: true }, { key: "insurancePct", type: "pct", default: 0, required: true }, { key: "advanceRecoveryPct", type: "pct", default: 0 },
         { key: "startDate", type: "date" }, { key: "endDate", type: "date" },
       ],
@@ -199,18 +209,20 @@ export function buildConfigs(t: T): Record<string, ResourceConfig> {
       resource: "contractor-extracts", module: "contractorExtracts", title: t("nav.contractorExtracts"), doc: true, dateFilter: true, entityType: "contractorExtract",
       columns: [
         { key: "number" }, { key: "date", type: "date" }, { key: "contractor.name", label: t("f.contractor") }, { key: "contract.number", label: t("f.contract") },
-        { key: "project", get: (r) => r.project?.code, label: t("f.project") }, { key: "cumulativeGross", type: "money" }, { key: "previousGross", type: "money" },
+        { key: "project", get: (r) => r.project?.code, label: t("f.project") }, fxCol, { key: "cumulativeGross", type: "money" }, { key: "previousGross", type: "money" },
         { key: "currentGross", type: "money", total: true }, { key: "retentionAmount", type: "money", total: true }, { key: "advanceRecovery", type: "money", total: true },
         { key: "taxAmount", type: "money", total: true }, { key: "insuranceAmount", type: "money", total: true }, { key: "otherDeductions", type: "money", total: true },
         { key: "netAmount", type: "money", total: true }, { key: "paidAmount", type: "money", total: true }, { key: "remaining", type: "money", total: true }, { key: "status", type: "status" },
       ],
       form: [
         { key: "contractorId", type: "lookup", lookup: "contractors", required: true, createOnly: true, onPick: () => ({ contractId: "" }) },
-        { key: "contractId", type: "lookup", lookup: "subcontracts", lookupParams: (v) => ({ contractorId: v.contractorId }), required: true, createOnly: true },
+        { key: "contractId", type: "lookup", lookup: "subcontracts", lookupParams: (v) => ({ contractorId: v.contractorId }), required: true, createOnly: true, onPick: (_v, _vals, p) => (p ? { currency: p.currency ?? "EGP" } : undefined) },
         { key: "date", type: "date", required: true, default: today }, { key: "periodFrom", type: "date", required: true }, { key: "periodTo", type: "date", required: true },
-        { key: "cumulativeGross", type: "money", required: true }, { key: "otherDeductions", type: "money", default: 0 }, { key: "description", span: 2 },
+        { key: "cumulativeGross", type: "money", required: true }, { key: "otherDeductions", type: "money", default: 0 },
+        { key: "exchangeRate", label: t("x.exchangeRate"), type: "number", placeholder: t("x.rateAuto"), showIf: (v) => !!v.currency && v.currency !== "EGP" }, { key: "description", span: 2 },
       ],
-      toForm: (r) => ({ contractorId: r.contractorId, contractId: r.contractId, date: r.date?.slice(0, 10), periodFrom: r.periodFrom?.slice(0, 10), periodTo: r.periodTo?.slice(0, 10), cumulativeGross: String(r.cumulativeGross), otherDeductions: String(r.otherDeductions), description: r.description ?? "" }),
+      toPayload: (p) => { const { currency: _c, ...rest } = p; void _c; return rest; },
+      toForm: (r) => ({ contractorId: r.contractorId, contractId: r.contractId, currency: r.currency, exchangeRate: r.currency !== "EGP" ? String(r.exchangeRate) : "", date: r.date?.slice(0, 10), periodFrom: r.periodFrom?.slice(0, 10), periodTo: r.periodTo?.slice(0, 10), cumulativeGross: String(r.cumulativeGross), otherDeductions: String(r.otherDeductions), description: r.description ?? "" }),
       preview: (v, companyId, id) => <ExtractPreview kind="contractor" values={v} companyId={companyId} editingId={id} />,
       filters: [statusFilter, { key: "contractorId", type: "lookup", lookup: "contractors" }],
       modalSize: "xl",
@@ -219,17 +231,19 @@ export function buildConfigs(t: T): Record<string, ResourceConfig> {
       resource: "client-extracts", module: "clientExtracts", title: t("nav.clientExtracts"), doc: true, dateFilter: true, entityType: "clientExtract",
       columns: [
         { key: "number" }, { key: "date", type: "date" }, { key: "project", get: (r) => r.project?.code, label: t("f.project") }, { key: "client.name", label: t("f.client") },
-        { key: "cumulativeWork", type: "money" }, { key: "previousWork", type: "money" }, { key: "workValue", type: "money", total: true }, { key: "retentionAmount", type: "money", total: true },
+        fxCol, { key: "cumulativeWork", type: "money" }, { key: "previousWork", type: "money" }, { key: "workValue", type: "money", total: true }, { key: "retentionAmount", type: "money", total: true },
         { key: "taxAmount", type: "money", total: true }, { key: "insuranceAmount", type: "money", total: true }, { key: "otherDeductions", type: "money", total: true },
         { key: "netAmount", type: "money", total: true }, { key: "paidAmount", type: "money", total: true }, { key: "remaining", type: "money", total: true }, { key: "status", type: "status" },
       ],
       form: [
-        { ...projectLookup, required: true, createOnly: true, onPick: (_v, _vals, p) => (p ? { clientId: p.clientId ?? "" } : undefined) },
+        { ...projectLookup, required: true, createOnly: true, onPick: (_v, _vals, p) => (p ? { clientId: p.clientId ?? "", currency: p.currency ?? "EGP" } : undefined) },
         { key: "clientId", type: "lookup", lookup: "clients", createOnly: true },
         { key: "date", type: "date", required: true, default: today }, { key: "periodFrom", type: "date", required: true }, { key: "periodTo", type: "date", required: true },
-        { key: "cumulativeWork", type: "money", required: true }, { key: "otherDeductions", type: "money", default: 0 }, { key: "description", span: 2 },
+        { key: "cumulativeWork", type: "money", required: true }, { key: "otherDeductions", type: "money", default: 0 },
+        { key: "exchangeRate", label: t("x.exchangeRate"), type: "number", placeholder: t("x.rateAuto"), showIf: (v) => !!v.currency && v.currency !== "EGP" }, { key: "description", span: 2 },
       ],
-      toForm: (r) => ({ projectId: r.projectId, clientId: r.clientId, date: r.date?.slice(0, 10), periodFrom: r.periodFrom?.slice(0, 10), periodTo: r.periodTo?.slice(0, 10), cumulativeWork: String(r.cumulativeWork), otherDeductions: String(r.otherDeductions), description: r.description ?? "" }),
+      toPayload: (p) => { const { currency: _c, ...rest } = p; void _c; return rest; },
+      toForm: (r) => ({ projectId: r.projectId, clientId: r.clientId, currency: r.currency, exchangeRate: r.currency !== "EGP" ? String(r.exchangeRate) : "", date: r.date?.slice(0, 10), periodFrom: r.periodFrom?.slice(0, 10), periodTo: r.periodTo?.slice(0, 10), cumulativeWork: String(r.cumulativeWork), otherDeductions: String(r.otherDeductions), description: r.description ?? "" }),
       preview: (v, companyId, id) => <ExtractPreview kind="client" values={v} companyId={companyId} editingId={id} />,
       filters: [statusFilter, projectLookup],
       modalSize: "xl",
@@ -260,12 +274,12 @@ export function buildConfigs(t: T): Record<string, ResourceConfig> {
       resource: "custodies", module: "custody", title: t("t.custody"), doc: true, dateFilter: true, entityType: "custody",
       columns: [
         { key: "number" }, { key: "date", type: "date" }, { key: "employee.name", label: t("f.employee") }, { key: "purpose" }, { key: "project", get: (r) => r.project?.code, label: t("f.project") },
-        { key: "amount", type: "money", total: true }, { key: "spent", type: "money", total: true }, { key: "returnedAmount", type: "money", total: true }, { key: "remaining", type: "money", total: true },
+        fxCol, { key: "amount", type: "money", total: true }, { key: "spent", type: "money", total: true }, { key: "returnedAmount", type: "money", total: true }, { key: "remaining", type: "money", total: true },
         { key: "settlementStatus", type: "status" }, { key: "status", type: "status" },
       ],
       form: [
         { key: "employeeId", type: "lookup", lookup: "employees", required: true }, { key: "amount", type: "money", required: true }, { key: "date", type: "date", required: true, default: today },
-        { key: "cashBoxId", type: "lookup", lookup: "cash-boxes", required: true }, projectLookup, { key: "purpose", required: true, span: 3 },
+        { key: "cashBoxId", type: "lookup", lookup: "cash-boxes", required: true, onPick: pickCurrency }, ...fxForm, projectLookup, { key: "purpose", required: true, span: 3 },
       ],
       rowActions: [{ key: "settle", label: t("c.settle"), perm: "approve", tone: "success", confirm: true, show: (r) => r.status === "POSTED" && r.settlementStatus === "OPEN" }],
       detail: (r) =>
@@ -436,13 +450,13 @@ export function buildConfigs(t: T): Record<string, ResourceConfig> {
       resource: "employees", module: "hr", title: t("t.employees"), entityType: "employee",
       columns: [
         { key: "code" }, { key: "name" }, { key: "department.name", label: t("f.department") }, { key: "position.name", label: t("f.position") },
-        { key: "project", get: (r) => r.project?.code, label: t("f.project") }, { key: "hireDate", type: "date" }, { key: "basicSalary", type: "money", total: true },
+        { key: "project", get: (r) => r.project?.code, label: t("f.project") }, { key: "hireDate", type: "date" }, { key: "salaryCurrency", label: t("x.currency") }, { key: "basicSalary", type: "money", total: true },
         { key: "allowances", type: "money", total: true }, { key: "status", type: "status" },
       ],
       form: [
         { key: "code", placeholder: "AUTO" }, { key: "name", required: true, span: 2 }, { key: "nationalId" }, { key: "phone" }, { key: "email", type: "email" },
         { key: "departmentId", type: "lookup", lookup: "departments" }, { key: "positionId", type: "lookup", lookup: "positions" }, projectLookup,
-        { key: "hireDate", type: "date" }, { key: "basicSalary", type: "money", required: true }, { key: "allowances", type: "money", default: 0 },
+        { key: "hireDate", type: "date" }, { key: "salaryCurrency", label: t("x.salaryCurrency"), type: "select", options: [...CURRENCIES], default: "EGP" }, { key: "basicSalary", type: "money", required: true }, { key: "allowances", type: "money", default: 0 },
         { key: "insuranceSalary", type: "money" }, { key: "bankAccount" }, { key: "status", type: "select", options: ["ACTIVE", "ON_LEAVE", "TERMINATED"], default: "ACTIVE", required: true },
       ],
       detail: (r) =>
@@ -505,10 +519,10 @@ export function buildConfigs(t: T): Record<string, ResourceConfig> {
       resource: "payrolls", module: "payroll", title: t("t.payrolls"), doc: true, noEdit: true, entityType: "payroll",
       columns: [
         { key: "number" }, { key: "month" }, { key: "project", get: (r) => (r.project ? code(r, "project") : t("c.allCompanies")), label: t("f.project") },
-        { key: "lines", get: (r) => r._count?.lines, type: "number", label: t("f.employees") }, { key: "totalGross", type: "money", total: true },
+        { key: "lines", get: (r) => r._count?.lines, type: "number", label: t("f.employees") }, fxCol, { key: "totalGross", type: "money", total: true },
         { key: "totalDeductions", type: "money", total: true }, { key: "totalNet", type: "money", total: true }, { key: "status", type: "status" },
       ],
-      form: [{ key: "month", type: "month", required: true, default: thisMonth }, projectLookup],
+      form: [{ key: "month", type: "month", required: true, default: thisMonth }, projectLookup, ...fxForm],
       rowActions: [{ key: "recalculate", label: t("c.recalculate"), perm: "edit", show: (r) => r.status === "DRAFT" }],
       detail: (r) => (r.lines ? <PayrollLines row={r} t={t} /> : null),
       filters: [statusFilter],

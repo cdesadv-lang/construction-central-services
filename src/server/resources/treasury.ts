@@ -157,12 +157,14 @@ export const treasuryResources: Record<string, ResourceDef> = {
     orderBy: [{ date: "desc" }],
     prepareCreate: async (tx, _ctx, data) => {
       checkMethod(data);
-      await resolveDocFx(tx, data.companyId, data);
       if (data.custodyId) {
         const c = await tx.custody.findUnique({ where: { id: data.custodyId } });
         data.employeeId ??= c?.employeeId;
         data.projectId ??= c?.projectId;
+        // custody expenses are in the custody currency, at the custody rate
+        if (c && data.paymentMethod === "CUSTODY") Object.assign(data, { currency: c.currency, exchangeRate: c.exchangeRate });
       }
+      await resolveDocFx(tx, data.companyId, data);
       if (data.projectId && !data.costCenterId) {
         const cc = await tx.costCenter.findFirst({ where: { projectId: data.projectId } });
         data.costCenterId = cc?.id ?? null;
@@ -171,6 +173,11 @@ export const treasuryResources: Record<string, ResourceDef> = {
     },
     prepareUpdate: async (tx, _ctx, existing, data) => {
       checkMethod({ ...existing, ...data });
+      const custodyId = data.custodyId ?? existing.custodyId;
+      if (custodyId && (data.paymentMethod ?? existing.paymentMethod) === "CUSTODY") {
+        const c = await tx.custody.findUnique({ where: { id: custodyId } });
+        if (c) Object.assign(data, { currency: c.currency, exchangeRate: c.exchangeRate });
+      }
       return resolveDocFx(tx, existing.companyId, data, existing);
     },
   },
@@ -178,8 +185,9 @@ export const treasuryResources: Record<string, ResourceDef> = {
     model: "custody",
     module: "custody",
     docType: "CUSTODY",
-    create: z.object({ number: optStr, employeeId: reqId, amount: money, date: reqDate, purpose: reqStr, cashBoxId: reqId, projectId: optId }),
-    update: z.object({ employeeId: reqId, amount: money, date: reqDate, purpose: reqStr, cashBoxId: reqId, projectId: optId }).partial(),
+    // custody in the cash box currency: expenses against it and the settlement use the custody rate
+    create: z.object({ number: optStr, employeeId: reqId, amount: money, date: reqDate, purpose: reqStr, cashBoxId: reqId, projectId: optId, ...fxFields }),
+    update: z.object({ employeeId: reqId, amount: money, date: reqDate, purpose: reqStr, cashBoxId: reqId, projectId: optId, ...fxFields }).partial(),
     search: ["number", "purpose", "employee.name"],
     filters: ["status", "settlementStatus", "employeeId"],
     dateField: "date",
@@ -197,6 +205,8 @@ export const treasuryResources: Record<string, ResourceDef> = {
       });
     },
     detail: async (tx, row) => ({ expenses: await tx.expense.findMany({ where: { custodyId: row.id }, orderBy: { date: "asc" } }) }),
+    prepareCreate: async (tx, _ctx, data) => resolveDocFx(tx, data.companyId, data),
+    prepareUpdate: async (tx, _ctx, existing, data) => resolveDocFx(tx, existing.companyId, data, existing),
     actions: { settle: { perm: "approve", run: (tx, ctx, existing) => settleCustody(tx, ctx, existing.id) } },
   },
   payments: {

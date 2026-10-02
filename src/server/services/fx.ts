@@ -1,7 +1,9 @@
 import type { Tx } from "@/lib/db";
 import { D } from "@/lib/money";
 import { badRequest, unprocessable } from "@/lib/errors";
-import { BASE_CURRENCY, FxError, isForeign, normCurrency } from "@/lib/fx";
+import { BASE_CURRENCY, convertLines, FxError, isForeign, normCurrency } from "@/lib/fx";
+import { checkBalanced, UnbalancedError } from "@/lib/accounting";
+import type { LineInput } from "./accounting";
 
 /** Latest rate (EGP per 1 unit) on or before the date; 1 for EGP. */
 export async function rateOn(tx: Tx, companyId: string, currency: string, date: Date) {
@@ -42,4 +44,37 @@ export function assertSameCurrency(what: string, accountCurrency: string | null 
   const a = accountCurrency ?? BASE_CURRENCY;
   const d = docCurrency ?? BASE_CURRENCY;
   if (a !== d) throw unprocessable(`${what} is in ${a} but the document is in ${d} — use an account in the same currency (or a transfer in the same currency)`);
+}
+
+/**
+ * Manual journal entries in a foreign currency: lines are entered (and must balance) in the entry currency, then
+ * converted to EGP lines tagged with currency / original amount / rate (rounding absorbed so the EGP entry balances).
+ */
+export function convertManualLines(lines: LineInput[], currency: string, rate: unknown): LineInput[] {
+  try {
+    checkBalanced(lines);
+    if (!isForeign(currency)) return lines.map((l) => ({ ...l, currency: null, fxAmount: null, exchangeRate: null }));
+    return convertLines(lines as (LineInput & { accountId: string })[], currency, rate as never) as LineInput[];
+  } catch (e) {
+    if (e instanceof UnbalancedError || e instanceof FxError) throw unprocessable(e.message);
+    throw e;
+  }
+}
+
+/** Journal lines of an existing entry expressed back in the entry currency (for edits that keep the lines). */
+export function linesInEntryCurrency(lines: { accountId: string; debit: unknown; credit: unknown; fxAmount?: unknown; currency?: string | null; costCenterId?: string | null; projectId?: string | null; description?: string | null; partyType?: string | null; partyId?: string | null }[]): LineInput[] {
+  return lines.map((l) => {
+    const foreign = isForeign(l.currency) && l.fxAmount !== null && l.fxAmount !== undefined;
+    const dr = D(l.debit as never);
+    return {
+      accountId: l.accountId,
+      debit: foreign ? (dr.greaterThan(0) ? D(l.fxAmount as never) : 0) : dr,
+      credit: foreign ? (dr.greaterThan(0) ? 0 : D(l.fxAmount as never)) : D(l.credit as never),
+      costCenterId: l.costCenterId,
+      projectId: l.projectId,
+      description: l.description,
+      partyType: l.partyType,
+      partyId: l.partyId,
+    };
+  });
 }

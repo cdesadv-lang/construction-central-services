@@ -5,7 +5,8 @@ import { D, r2 } from "@/lib/money";
 import { badRequest } from "@/lib/errors";
 import { computeClientExtract, computeContractorExtract } from "../services/posting";
 import type { ResourceDef } from "./engine";
-import { optDate, optId, optStr, money, pct, reqDate, reqId, reqStr, optMoney, optInt, fxFields } from "./z";
+import { optDate, optId, optStr, money, pct, reqDate, reqId, reqStr, optMoney, optInt, fxFields, currency, optRate } from "./z";
+import { unprocessable } from "@/lib/errors";
 import { resolveDocFx } from "../services/fx";
 
 const EXPENSE_TYPES = ["MATERIALS", "LABOR", "EQUIPMENT", "TRANSPORT", "FUEL", "RENT", "CONTRACTORS", "ADMIN", "OTHER"] as const;
@@ -46,6 +47,8 @@ const contractFields = {
   advanceRecoveryPct: pct.optional(),
   startDate: optDate,
   endDate: optDate,
+  /** contract currency (extracts and their payments are in it) */
+  currency,
 };
 
 export const partyResources: Record<string, ResourceDef> = {
@@ -175,14 +178,20 @@ export const partyResources: Record<string, ResourceDef> = {
         };
       });
     },
+    prepareUpdate: async (tx, _ctx, existing, data) => {
+      if (data.currency && data.currency !== existing.currency && (await tx.contractorExtract.count({ where: { contractId: existing.id, status: { not: "CANCELLED" } } })))
+        throw unprocessable("The contract currency cannot change once extracts exist");
+      return data;
+    },
     canDelete: async (tx, row) => ((await tx.contractorExtract.count({ where: { contractId: row.id } })) ? "Contract has extracts" : null),
   },
   "contractor-extracts": {
     model: "contractorExtract",
     module: "contractorExtracts",
     docType: "CONTRACTOR_EXTRACT",
-    create: z.object({ number: optStr, contractId: reqId, periodFrom: reqDate, periodTo: reqDate, date: reqDate, cumulativeGross: money, otherDeductions: optMoney, description: optStr }),
-    update: z.object({ periodFrom: reqDate, periodTo: reqDate, date: reqDate, cumulativeGross: money, otherDeductions: optMoney, description: optStr }).partial(),
+    // currency comes from the contract; the rate is entered or taken from the rate table for the extract date
+    create: z.object({ number: optStr, contractId: reqId, periodFrom: reqDate, periodTo: reqDate, date: reqDate, cumulativeGross: money, otherDeductions: optMoney, description: optStr, exchangeRate: optRate }),
+    update: z.object({ periodFrom: reqDate, periodTo: reqDate, date: reqDate, cumulativeGross: money, otherDeductions: optMoney, description: optStr, exchangeRate: optRate }).partial(),
     search: ["number", "description", "contractor.name"],
     filters: ["status", "contractorId", "contractId", "projectId"],
     dateField: "date",
@@ -198,6 +207,7 @@ export const partyResources: Record<string, ResourceDef> = {
     prepareCreate: async (tx, _ctx, data) => {
       if (new Date(data.periodTo) < new Date(data.periodFrom)) throw badRequest("Period end must be after period start");
       const { contract, calc } = await computeContractorExtract(tx, data);
+      await resolveDocFx(tx, data.companyId, Object.assign(data, { currency: contract.currency }));
       return { ...data, ...calc, contractorId: contract.contractorId, projectId: contract.projectId };
     },
     prepareUpdate: async (tx, _ctx, existing, data) => {
@@ -208,6 +218,7 @@ export const partyResources: Record<string, ResourceDef> = {
         otherDeductions: data.otherDeductions ?? existing.otherDeductions,
         excludeId: existing.id,
       });
+      await resolveDocFx(tx, existing.companyId, Object.assign(data, { currency: existing.currency }), existing);
       return { ...data, ...calc };
     },
     decorate: async (rows) => rows.map((r) => ({ ...r, remaining: D(r.netAmount).minus(D(r.paidAmount)).toFixed(2) })),
@@ -216,8 +227,9 @@ export const partyResources: Record<string, ResourceDef> = {
     model: "clientExtract",
     module: "clientExtracts",
     docType: "CLIENT_EXTRACT",
-    create: z.object({ number: optStr, projectId: reqId, clientId: optId, periodFrom: reqDate, periodTo: reqDate, date: reqDate, cumulativeWork: money, otherDeductions: optMoney, description: optStr }),
-    update: z.object({ periodFrom: reqDate, periodTo: reqDate, date: reqDate, cumulativeWork: money, otherDeductions: optMoney, description: optStr }).partial(),
+    // currency comes from the project (billing currency); rate entered or taken from the rate table
+    create: z.object({ number: optStr, projectId: reqId, clientId: optId, periodFrom: reqDate, periodTo: reqDate, date: reqDate, cumulativeWork: money, otherDeductions: optMoney, description: optStr, exchangeRate: optRate }),
+    update: z.object({ periodFrom: reqDate, periodTo: reqDate, date: reqDate, cumulativeWork: money, otherDeductions: optMoney, description: optStr, exchangeRate: optRate }).partial(),
     search: ["number", "description", "client.name", "project.name"],
     filters: ["status", "clientId", "projectId"],
     dateField: "date",
@@ -231,6 +243,7 @@ export const partyResources: Record<string, ResourceDef> = {
       const { project, calc } = await computeClientExtract(tx, data);
       const clientId = data.clientId ?? project.clientId;
       if (!clientId) throw badRequest("Project has no client; select a client");
+      await resolveDocFx(tx, data.companyId, Object.assign(data, { currency: project.currency }));
       return { ...data, ...calc, clientId };
     },
     prepareUpdate: async (tx, _ctx, existing, data) => {
@@ -241,6 +254,7 @@ export const partyResources: Record<string, ResourceDef> = {
         otherDeductions: data.otherDeductions ?? existing.otherDeductions,
         excludeId: existing.id,
       });
+      await resolveDocFx(tx, existing.companyId, Object.assign(data, { currency: existing.currency }), existing);
       return { ...data, ...calc };
     },
     decorate: async (rows) => rows.map((r) => ({ ...r, remaining: D(r.netAmount).minus(D(r.paidAmount)).toFixed(2) })),

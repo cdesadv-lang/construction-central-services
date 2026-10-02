@@ -12,7 +12,7 @@ beforeAll(async () => {
   chief = await ctxFor("chief@ccs.local");
   cfo = await ctxFor("cfo@ccs.local");
   nileId = (await company("NILE")).id;
-  cashBoxId = (await prisma.cashBox.findFirstOrThrow({ where: { companyId: nileId } })).id;
+  cashBoxId = (await prisma.cashBox.findFirstOrThrow({ where: { companyId: nileId, currency: "EGP" } })).id;
 });
 
 const je = (date: string) => ({

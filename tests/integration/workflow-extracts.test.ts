@@ -18,7 +18,7 @@ beforeAll(async () => {
 });
 
 async function newExpense() {
-  const cash = await prisma.cashBox.findFirstOrThrow({ where: { companyId: nileId }, orderBy: { code: "desc" } });
+  const cash = await prisma.cashBox.findFirstOrThrow({ where: { companyId: nileId, currency: "EGP" }, orderBy: { code: "desc" } });
   const p = await prisma.project.findFirstOrThrow({ where: { code: "NIL-P02" } });
   return create(acc, "expenses", { companyId: nileId, projectId: p.id, type: "TRANSPORT", date: "2026-09-15", amount: 1500, paymentMethod: "CASH", cashBoxId: cash.id, description: "اختبار" });
 }
@@ -92,7 +92,7 @@ describe("contractor extracts end-to-end", () => {
     await act(extracts, "contractor-extracts", ex2.id, "cancel");
 
     // payment over remaining is rejected at posting
-    const bank = await prisma.bankAccount.findFirstOrThrow({ where: { companyId: nileId } });
+    const bank = await prisma.bankAccount.findFirstOrThrow({ where: { companyId: nileId, currency: "EGP" } });
     const over = await create(treasury, "payments", { companyId: nileId, type: "CONTRACTOR_PAYMENT", date: "2026-10-05", amount: 290_000, method: "BANK", bankAccountId: bank.id, contractorExtractId: ex1.id });
     for (const [who, a] of [[treasury, "submit"], [chief, "approve"], [cfo, "approve"]] as const) await act(who, "payments", over.id, a);
     await expectApiError(act(cfo, "payments", over.id, "post"), 422);

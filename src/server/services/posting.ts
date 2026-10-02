@@ -16,7 +16,7 @@ import {
 } from "./accounting";
 import { DOC_TYPES, type DocType } from "./doctypes";
 import { cancelExpenseCheque, cancelPaymentCheque, registerExpenseCheque, registerPaymentCheque } from "./cheques";
-import { convertLines, FxError, isForeign, toBase } from "@/lib/fx";
+import { convertLines, FxError, fxBalance, isForeign, toBase } from "@/lib/fx";
 import { assertSameCurrency } from "./fx";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -53,13 +53,42 @@ async function custodyRemaining(tx: Tx, custodyId: string, excludeExpenseId?: st
   return { custody: c, spent: D(spent._sum.amount), remaining: D(c.amount).minus(D(spent._sum.amount)).minus(D(c.returnedAmount)) };
 }
 
-export async function contractorAdvanceBalance(tx: Tx, companyId: string, contractorId: string) {
+/** Open advance balance of a contractor in a currency (EGP: untagged lines in EGP; foreign: original-currency amounts). */
+export async function contractorAdvanceBalance(tx: Tx, companyId: string, contractorId: string, currency = "EGP") {
   const acc = await accountIdByKey(tx, companyId, "CONTRACTOR_ADVANCES");
+  if (isForeign(currency)) {
+    const lines = await tx.journalLine.findMany({ where: { accountId: acc, partyType: "CONTRACTOR", partyId: contractorId, currency, entry: { status: "POSTED" } }, select: { debit: true, credit: true, fxAmount: true, currency: true } });
+    return fxBalance(lines, currency);
+  }
   const agg = await tx.journalLine.aggregate({
-    where: { accountId: acc, partyType: "CONTRACTOR", partyId: contractorId, entry: { status: "POSTED" } },
+    where: { accountId: acc, partyType: "CONTRACTOR", partyId: contractorId, currency: null, entry: { status: "POSTED" } },
     _sum: { debit: true, credit: true },
   });
   return D(agg._sum.debit).minus(D(agg._sum.credit));
+}
+
+/**
+ * Settling a foreign-currency document (invoice / extract) at a rate different from the document rate: the party
+ * account is cleared at the document rate, the money account moves at today's rate and the difference is a
+ * realized FX gain/loss.
+ */
+async function fxSettlementLines(
+  acc: (k: string) => Promise<string>,
+  o: { side: "pay" | "receive"; partyAccount: string; party: { partyType: string; partyId: string }; money: string; amount: ReturnType<typeof D>; cur: string; docRate: unknown; payRate: unknown },
+): Promise<LineInput[]> {
+  const partyBase = toBase(o.amount, o.docRate as never);
+  const moneyBase = toBase(o.amount, o.payRate as never);
+  const fx = { currency: o.cur, fxAmount: o.amount };
+  const fxAcc = await acc("FX_DIFFERENCES");
+  // pay: extra EGP paid = loss; receive: extra EGP received = gain
+  const loss = o.side === "pay" ? moneyBase.minus(partyBase) : partyBase.minus(moneyBase);
+  const lines: LineInput[] =
+    o.side === "pay"
+      ? [{ accountId: o.partyAccount, debit: partyBase, ...o.party, ...fx, exchangeRate: o.docRate as never }, { accountId: o.money, credit: moneyBase, ...fx, exchangeRate: o.payRate as never }]
+      : [{ accountId: o.money, debit: moneyBase, ...fx, exchangeRate: o.payRate as never }, { accountId: o.partyAccount, credit: partyBase, ...o.party, ...fx, exchangeRate: o.docRate as never }];
+  if (loss.greaterThan(0)) lines.push({ accountId: fxAcc, debit: loss, description: "خسائر فروق عملة محققة / Realized FX loss" });
+  else if (loss.lessThan(0)) lines.push({ accountId: fxAcc, credit: loss.abs(), description: "أرباح فروق عملة محققة / Realized FX gain" });
+  return lines;
 }
 
 /** Builds journal lines + description for a document. Throws on business-rule violations. */
@@ -74,13 +103,21 @@ async function buildEntry(tx: Tx, docType: DocType, doc: any): Promise<{ lines: 
       const debit = await acc(EXPENSE_TYPE_ACCOUNT[doc.type as keyof typeof EXPENSE_TYPE_ACCOUNT]);
       let credit: LineInput;
       if (doc.paymentMethod === "CUSTODY") {
-        if (isForeign(cur)) throw unprocessable("Custody expenses must be in EGP (custody is paid from an EGP cash box)");
         if (!doc.custodyId) throw badRequest("Custody is required for custody payment method");
         const { custody, remaining } = await custodyRemaining(tx, doc.custodyId, doc.id);
         if (custody.companyId !== c) throw badRequest("Custody belongs to another company");
         if (custody.status !== "POSTED" || custody.settlementStatus !== "OPEN") throw unprocessable("Custody is not open/posted");
+        if (custody.currency !== cur) throw unprocessable(`Custody ${custody.number} is in ${custody.currency} — the expense must be in the same currency`);
         if (amount.greaterThan(remaining)) throw unprocessable(`Custody remaining balance (${remaining.toFixed(2)}) is insufficient`);
         credit = { accountId: await acc("CUSTODY"), credit: amount, partyType: "EMPLOYEE", partyId: custody.employeeId };
+        if (isForeign(cur)) {
+          // spent out of foreign cash already converted when the custody was paid: use the custody's rate
+          const lines = [
+            { accountId: debit, debit: amount, costCenterId: doc.costCenterId, projectId: doc.projectId, description: doc.description },
+            { ...credit, description: doc.description },
+          ];
+          return { date: doc.date, projectId: doc.projectId, description: `مصروف ${doc.number}${doc.description ? " - " + doc.description : ""}`, converted: true, lines: convertLines(lines, cur, custody.exchangeRate) };
+        }
       } else if (doc.paymentMethod === "CREDIT") {
         if (!doc.supplierId) throw badRequest("Supplier is required for credit (on-account) expenses");
         credit = { accountId: await acc("AP_SUPPLIERS"), credit: amount, partyType: "SUPPLIER", partyId: doc.supplierId };
@@ -142,22 +179,9 @@ async function buildEntry(tx: Tx, docType: DocType, doc: any): Promise<{ lines: 
           if (amount.greaterThan(rem)) throw unprocessable(`Amount exceeds invoice remaining (${rem.toFixed(2)})`);
           if (isForeign(cur) && !D(inv.exchangeRate).equals(D(doc.exchangeRate))) {
             // settle the payable at the invoice rate, pay at today's rate; the difference is a realized FX gain/loss
-            const apBase = toBase(amount, inv.exchangeRate);
-            const payBase = toBase(amount, doc.exchangeRate);
-            const diff = payBase.minus(apBase);
-            const fx = { currency: cur, fxAmount: amount };
             return {
-              date: doc.date,
-              projectId: doc.projectId,
-              description: `سداد مورد ${doc.number} (${cur})`,
-              converted: true,
-              lines: [
-                { accountId: await acc("AP_SUPPLIERS"), debit: apBase, partyType: "SUPPLIER", partyId: doc.supplierId, ...fx, exchangeRate: inv.exchangeRate },
-                { accountId: money, credit: payBase, ...fx, exchangeRate: doc.exchangeRate },
-                diff.greaterThan(0)
-                  ? { accountId: await acc("FX_DIFFERENCES"), debit: diff, description: "خسائر فروق عملة محققة" }
-                  : { accountId: await acc("FX_DIFFERENCES"), credit: diff.abs(), description: "أرباح فروق عملة محققة" },
-              ].filter(nz),
+              date: doc.date, projectId: doc.projectId, description: `سداد مورد ${doc.number} (${cur})`, converted: true,
+              lines: (await fxSettlementLines(acc, { side: "pay", partyAccount: await acc("AP_SUPPLIERS"), party: { partyType: "SUPPLIER", partyId: doc.supplierId }, money, amount, cur, docRate: inv.exchangeRate, payRate: doc.exchangeRate })).filter(nz),
             };
           }
         }
@@ -177,9 +201,14 @@ async function buildEntry(tx: Tx, docType: DocType, doc: any): Promise<{ lines: 
           const ex = await tx.contractorExtract.findUnique({ where: { id: doc.contractorExtractId } });
           if (!ex || ex.companyId !== c || ex.contractorId !== doc.contractorId) throw badRequest("Extract does not match contractor/company");
           if (ex.status !== "POSTED") throw unprocessable("Extract must be posted before payment");
-          if (isForeign(cur)) throw unprocessable("Extracts are in EGP — pay them in EGP");
+          if (ex.currency !== cur) throw unprocessable(`Payment currency (${cur}) must match the extract currency (${ex.currency})`);
           const rem = D(ex.netAmount).minus(D(ex.paidAmount));
           if (amount.greaterThan(rem)) throw unprocessable(`Amount exceeds extract remaining (${rem.toFixed(2)})`);
+          if (isForeign(cur) && !D(ex.exchangeRate).equals(D(doc.exchangeRate)))
+            return {
+              date: doc.date, projectId: doc.projectId, description: `سداد مقاول ${doc.number} (${cur})`, converted: true,
+              lines: await fxSettlementLines(acc, { side: "pay", partyAccount: await acc("AP_CONTRACTORS"), party: { partyType: "CONTRACTOR", partyId: doc.contractorId }, money, amount, cur, docRate: ex.exchangeRate, payRate: doc.exchangeRate }),
+            };
         }
         const key = doc.type === "CONTRACTOR_ADVANCE" ? "CONTRACTOR_ADVANCES" : "AP_CONTRACTORS";
         return {
@@ -198,9 +227,14 @@ async function buildEntry(tx: Tx, docType: DocType, doc: any): Promise<{ lines: 
           const ex = await tx.clientExtract.findUnique({ where: { id: doc.clientExtractId } });
           if (!ex || ex.companyId !== c || ex.clientId !== doc.clientId) throw badRequest("Extract does not match client/company");
           if (ex.status !== "POSTED") throw unprocessable("Client extract must be posted before collection");
-          if (isForeign(cur)) throw unprocessable("Extracts are in EGP — collect them in EGP");
+          if (ex.currency !== cur) throw unprocessable(`Receipt currency (${cur}) must match the extract currency (${ex.currency})`);
           const rem = D(ex.netAmount).minus(D(ex.paidAmount));
           if (amount.greaterThan(rem)) throw unprocessable(`Amount exceeds extract remaining (${rem.toFixed(2)})`);
+          if (isForeign(cur) && !D(ex.exchangeRate).equals(D(doc.exchangeRate)))
+            return {
+              date: doc.date, projectId: doc.projectId, description: `تحصيل من عميل ${doc.number} (${cur})`, converted: true,
+              lines: await fxSettlementLines(acc, { side: "receive", partyAccount: await acc("AR"), party: { partyType: "CLIENT", partyId: doc.clientId }, money, amount, cur, docRate: ex.exchangeRate, payRate: doc.exchangeRate }),
+            };
         }
         return {
           date: doc.date,
@@ -335,7 +369,7 @@ async function buildEntry(tx: Tx, docType: DocType, doc: any): Promise<{ lines: 
         description: `صرف عهدة ${doc.number} - ${doc.purpose}`,
         lines: [
           { accountId: await acc("CUSTODY"), debit: amount, partyType: "EMPLOYEE", partyId: doc.employeeId, projectId: doc.projectId },
-          { accountId: await moneyAccount(tx, c, "CASH", doc.cashBoxId, null, "EGP"), credit: amount },
+          { accountId: await moneyAccount(tx, c, "CASH", doc.cashBoxId, null, cur), credit: amount },
         ],
       };
     }
@@ -402,6 +436,8 @@ export async function postDocument(tx: Tx, ctx: Ctx, docType: DocType, id: strin
       status: "POSTED",
       sourceType: docType,
       sourceId: doc.id,
+      currency: doc.currency ?? "EGP",
+      exchangeRate: doc.exchangeRate ?? 1,
     });
     journalEntryId = je.id;
   }
@@ -465,6 +501,9 @@ export async function settleCustody(tx: Tx, ctx: Ctx, id: string) {
   let settlementEntryId: string | null = null;
   if (remaining.greaterThan(0)) {
     const cb = await tx.cashBox.findUnique({ where: { id: custody.cashBoxId } });
+    // returned at the custody's rate (the cash left the box at that rate)
+    const base = toBase(remaining, custody.exchangeRate);
+    const fx = isForeign(custody.currency) ? { currency: custody.currency, fxAmount: remaining, exchangeRate: custody.exchangeRate } : {};
     const je = await createJournalEntry(tx, ctx, {
       companyId: custody.companyId,
       date: new Date(),
@@ -473,9 +512,11 @@ export async function settleCustody(tx: Tx, ctx: Ctx, id: string) {
       status: "POSTED",
       sourceType: "CUSTODY_SETTLEMENT",
       sourceId: custody.id,
+      currency: custody.currency,
+      exchangeRate: custody.exchangeRate,
       lines: [
-        { accountId: cb!.accountId, debit: remaining },
-        { accountId: await accountIdByKey(tx, custody.companyId, "CUSTODY"), credit: remaining, partyType: "EMPLOYEE", partyId: custody.employeeId },
+        { accountId: cb!.accountId, debit: base, ...fx },
+        { accountId: await accountIdByKey(tx, custody.companyId, "CUSTODY"), credit: base, partyType: "EMPLOYEE", partyId: custody.employeeId, ...fx },
       ],
     });
     settlementEntryId = je.id;
@@ -503,7 +544,7 @@ export async function computeContractorExtract(
     where: { contractId: contract.id, status: { in: ["DRAFT", "PENDING_APPROVAL", "APPROVED"] }, ...(input.excludeId ? { id: { not: input.excludeId } } : {}) },
   });
   if (pending) throw unprocessable("Another unposted extract exists for this contract — post or cancel it first");
-  const advanceBalance = await contractorAdvanceBalance(tx, input.companyId, contract.contractorId);
+  const advanceBalance = await contractorAdvanceBalance(tx, input.companyId, contract.contractorId, contract.currency);
   try {
     const calc = calcContractorExtract({
       contractValue: contract.contractValue,

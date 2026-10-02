@@ -315,7 +315,7 @@ const P: Record<string, Record<string, [string, string]>> = {
     // fx
     currency: ["العملة", "Currency"], exchangeRate: ["سعر الصرف", "Exchange rate"], exchangeRates: ["أسعار الصرف", "Exchange rates"], baseCurrency: ["العملة الأساسية", "Base currency"],
     rateAuto: ["تلقائي من جدول الأسعار", "auto (rate table)"], rateEgp: ["السعر (جنيه لكل وحدة)", "Rate (EGP per unit)"],
-    fxAmount: ["المبلغ بالعملة", "Amount (currency)"], baseAmount: ["المعادل بالجنيه", "Base amount (EGP)"], fxBalance: ["الرصيد بالعملة", "Balance (currency)"],
+    fxAmount: ["المبلغ بالعملة", "Amount (currency)"], baseAmount: ["المعادل بالجنيه", "Base amount (EGP)"], fxBalance: ["الرصيد بالعملة", "Balance (currency)"], contractCurrency: ["عملة العقد", "Contract currency"], salaryCurrency: ["عملة الراتب", "Salary currency"],
   },};
 
 function build(i: 0 | 1): Dict {

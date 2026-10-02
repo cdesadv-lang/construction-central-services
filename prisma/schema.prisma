@@ -331,6 +331,8 @@ model Project {
   clientId           String?
   client             Client?       @relation(fields: [clientId], references: [id])
   contractValue      Decimal       @default(0) @db.Decimal(18, 2)
+  /// contract / billing currency of the project (client extracts are issued in it)
+  currency           String        @default("EGP") @db.VarChar(3)
   startDate          DateTime?
   endDate            DateTime?
   projectManager     String?
@@ -437,6 +439,9 @@ model JournalEntry {
   projectId    String?
   project      Project?  @relation(fields: [projectId], references: [id])
   description  String
+  /// entry currency: manual foreign-currency entries are entered in it and converted to EGP lines at exchangeRate
+  currency     String    @default("EGP") @db.VarChar(3)
+  exchangeRate Decimal   @default(1) @db.Decimal(18, 6)
   status       DocStatus @default(DRAFT)
   sourceType   String?
   sourceId     String?
@@ -647,6 +652,8 @@ model SubContract {
   project            Project    @relation(fields: [projectId], references: [id])
   scope              String
   contractValue      Decimal    @default(0) @db.Decimal(18, 2)
+  /// contract currency (contractor extracts are issued in it)
+  currency           String     @default("EGP") @db.VarChar(3)
   retentionPct       Decimal    @default(5) @db.Decimal(5, 2)
   taxPct             Decimal    @default(1) @db.Decimal(5, 2)
   insurancePct       Decimal    @default(0) @db.Decimal(5, 2)
@@ -685,6 +692,9 @@ model ContractorExtract {
   otherDeductions Decimal     @default(0) @db.Decimal(18, 2)
   netAmount       Decimal     @default(0) @db.Decimal(18, 2)
   paidAmount      Decimal     @default(0) @db.Decimal(18, 2)
+  currency        String      @default("EGP") @db.VarChar(3)
+  /// EGP per 1 unit of currency (snapshot taken from the exchange-rate table unless entered)
+  exchangeRate    Decimal     @default(1) @db.Decimal(18, 6)
   description     String?
   status          DocStatus   @default(DRAFT)
   journalEntryId  String?
@@ -718,6 +728,9 @@ model ClientExtract {
   insuranceAmount Decimal   @default(0) @db.Decimal(18, 2)
   netAmount       Decimal   @default(0) @db.Decimal(18, 2)
   paidAmount      Decimal   @default(0) @db.Decimal(18, 2)
+  currency        String      @default("EGP") @db.VarChar(3)
+  /// EGP per 1 unit of currency (snapshot taken from the exchange-rate table unless entered)
+  exchangeRate    Decimal     @default(1) @db.Decimal(18, 6)
   description     String?
   status          DocStatus @default(DRAFT)
   journalEntryId  String?
@@ -966,6 +979,9 @@ model Custody {
   employeeId        String
   employee          Employee      @relation(fields: [employeeId], references: [id])
   amount            Decimal       @db.Decimal(18, 2)
+  currency          String        @default("EGP") @db.VarChar(3)
+  /// EGP per 1 unit of currency; custody expenses and the settlement use this rate
+  exchangeRate      Decimal       @default(1) @db.Decimal(18, 6)
   date              DateTime
   purpose           String
   cashBoxId         String
@@ -1168,6 +1184,8 @@ model Employee {
   basicSalary     Decimal        @default(0) @db.Decimal(18, 2)
   allowances      Decimal        @default(0) @db.Decimal(18, 2)
   insuranceSalary Decimal        @default(0) @db.Decimal(18, 2)
+  /// currency the salary is agreed and paid in (payrolls are run per currency)
+  salaryCurrency  String         @default("EGP") @db.VarChar(3)
   bankAccount     String?
   status          EmployeeStatus @default(ACTIVE)
   createdAt       DateTime       @default(now())
@@ -1259,6 +1277,9 @@ model Payroll {
   totalGross      Decimal       @default(0) @db.Decimal(18, 2)
   totalDeductions Decimal       @default(0) @db.Decimal(18, 2)
   totalNet        Decimal       @default(0) @db.Decimal(18, 2)
+  currency        String        @default("EGP") @db.VarChar(3)
+  /// EGP per 1 unit of currency at month end (statutory insurance/tax are computed on the EGP equivalent)
+  exchangeRate    Decimal       @default(1) @db.Decimal(18, 6)
   status          DocStatus     @default(DRAFT)
   journalEntryId  String?
   createdById     String?

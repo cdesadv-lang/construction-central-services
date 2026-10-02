@@ -8,7 +8,8 @@ import { audit } from "../audit";
 import { buildPayrollLines } from "../services/payroll";
 import { monthEnd } from "../services/posting";
 import type { ResourceDef } from "./engine";
-import { optDate, optId, optStr, money, pct, reqDate, reqId, reqStr, optMoney, optInt, month } from "./z";
+import { optDate, optId, optStr, money, pct, reqDate, reqId, reqStr, optMoney, optInt, month, currency, fxFields } from "./z";
+import { resolveDocFx } from "../services/fx";
 
 const qty = z.coerce.number().positive().max(1e9);
 const prItem = z.object({ description: reqStr, unit: optStr, quantity: qty });
@@ -55,6 +56,8 @@ const employeeFields = {
   insuranceSalary: optMoney,
   bankAccount: optStr,
   status: z.enum(["ACTIVE", "ON_LEAVE", "TERMINATED"]).optional(),
+  /** salary currency (payrolls are run per currency) */
+  salaryCurrency: currency,
 };
 
 export const opsResources: Record<string, ResourceDef> = {
@@ -337,7 +340,8 @@ export const opsResources: Record<string, ResourceDef> = {
     model: "payroll",
     module: "payroll",
     docType: "PAYROLL",
-    create: z.object({ number: optStr, month, projectId: optId }),
+    // one payroll per salary currency; the month-end rate is taken from the rate table unless entered
+    create: z.object({ number: optStr, month, projectId: optId, ...fxFields }),
     update: z.object({}).partial(),
     filters: ["status", "month", "projectId"],
     projectField: "projectId",
@@ -348,13 +352,16 @@ export const opsResources: Record<string, ResourceDef> = {
     include: { project: { select: { code: true, name: true } }, lines: { orderBy: { employeeName: "asc" } } },
     orderBy: [{ month: "desc" }],
     customCreate: async (tx, ctx, data) => {
-      const b = await buildPayrollLines(tx, data.companyId, data.month, data.projectId);
+      const fx = await resolveDocFx(tx, data.companyId, { currency: data.currency, exchangeRate: data.exchangeRate, date: monthEnd(data.month) });
+      const b = await buildPayrollLines(tx, data.companyId, data.month, data.projectId, undefined, { currency: fx.currency, rate: fx.exchangeRate });
       return tx.payroll.create({
         data: {
           companyId: data.companyId,
           number: data.number,
           month: data.month,
           projectId: data.projectId ?? null,
+          currency: fx.currency,
+          exchangeRate: fx.exchangeRate,
           totalGross: b.totalGross,
           totalNet: b.totalNet,
           totalDeductions: b.totalDeductions,
@@ -368,7 +375,7 @@ export const opsResources: Record<string, ResourceDef> = {
         perm: "edit",
         run: async (tx, ctx, e) => {
           if (e.status !== "DRAFT") throw unprocessable("Only draft payrolls can be recalculated");
-          const b = await buildPayrollLines(tx, e.companyId, e.month, e.projectId, e.id);
+          const b = await buildPayrollLines(tx, e.companyId, e.month, e.projectId, e.id, { currency: e.currency, rate: e.exchangeRate });
           await audit(tx, ctx, { action: "RECALCULATE", entity: "payroll", entityId: e.id, companyId: e.companyId });
           return tx.payroll.update({
             where: { id: e.id },
