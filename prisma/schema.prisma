@@ -393,9 +393,9 @@ model Account {
   isActive     Boolean       @default(true)
   createdAt    DateTime      @default(now())
 
-  lines        JournalLine[]
-  cashBox      CashBox?
-  bankAccount  BankAccount?
+  lines       JournalLine[]
+  cashBox     CashBox?
+  bankAccount BankAccount?
 
   @@unique([companyId, code])
   @@unique([companyId, systemKey])
@@ -419,26 +419,26 @@ model CostCenter {
 }
 
 model JournalEntry {
-  id           String        @id @default(cuid())
+  id           String    @id @default(cuid())
   companyId    String
-  company      Company       @relation(fields: [companyId], references: [id])
+  company      Company   @relation(fields: [companyId], references: [id])
   number       String
   date         DateTime
   projectId    String?
-  project      Project?      @relation(fields: [projectId], references: [id])
+  project      Project?  @relation(fields: [projectId], references: [id])
   description  String
-  status       DocStatus     @default(DRAFT)
+  status       DocStatus @default(DRAFT)
   sourceType   String?
   sourceId     String?
   reversalOfId String?
-  totalDebit   Decimal       @default(0) @db.Decimal(18, 2)
-  totalCredit  Decimal       @default(0) @db.Decimal(18, 2)
+  totalDebit   Decimal   @default(0) @db.Decimal(18, 2)
+  totalCredit  Decimal   @default(0) @db.Decimal(18, 2)
   createdById  String?
   approvedById String?
   postedById   String?
   postedAt     DateTime?
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   lines JournalLine[]
 
@@ -948,6 +948,9 @@ model PurchaseRequestItem {
   description String
   unit        String          @default("unit")
   quantity    Decimal         @db.Decimal(18, 3)
+
+  quotationItems QuotationItem[]
+  orderItems     PurchaseOrderItem[]
 }
 
 model Quotation {
@@ -972,14 +975,17 @@ model Quotation {
 }
 
 model QuotationItem {
-  id            String    @id @default(cuid())
+  id            String              @id @default(cuid())
   quotationId   String
-  quotation     Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
-  requestItemId String?
+  quotation     Quotation           @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  requestItemId String
+  requestItem   PurchaseRequestItem @relation(fields: [requestItemId], references: [id], onDelete: NoAction)
   description   String
-  quantity      Decimal   @db.Decimal(18, 3)
-  unitPrice     Decimal   @db.Decimal(18, 2)
-  total         Decimal   @db.Decimal(18, 2)
+  quantity      Decimal             @db.Decimal(18, 3)
+  unitPrice     Decimal             @db.Decimal(18, 2)
+  total         Decimal             @db.Decimal(18, 2)
+
+  @@index([requestItemId])
 }
 
 model PurchaseOrder {
@@ -1013,15 +1019,18 @@ model PurchaseOrder {
 }
 
 model PurchaseOrderItem {
-  id          String        @id @default(cuid())
-  orderId     String
-  order       PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  description String
-  unit        String        @default("unit")
-  quantity    Decimal       @db.Decimal(18, 3)
-  unitPrice   Decimal       @db.Decimal(18, 2)
-  total       Decimal       @db.Decimal(18, 2)
-  receivedQty Decimal       @default(0) @db.Decimal(18, 3)
+  id              String               @id @default(cuid())
+  orderId         String
+  order           PurchaseOrder        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  requestItemId   String?
+  requestItem     PurchaseRequestItem? @relation(fields: [requestItemId], references: [id], onDelete: SetNull)
+  quotationItemId String?
+  description     String
+  unit            String               @default("unit")
+  quantity        Decimal              @db.Decimal(18, 3)
+  unitPrice       Decimal              @db.Decimal(18, 2)
+  total           Decimal              @db.Decimal(18, 2)
+  receivedQty     Decimal              @default(0) @db.Decimal(18, 3)
 }
 
 model GoodsReceipt {
@@ -1213,19 +1222,19 @@ model PayrollLine {
 
 // ───────────────────────── Documents, notifications, audit ─────────────────────────
 model Document {
-  id           String   @id @default(cuid())
-  companyId    String
-  company      Company  @relation(fields: [companyId], references: [id])
-  entityType   String?
-  entityId     String?
-  title        String
-  fileName     String
-  mimeType     String
-  size         Int
+  id            String   @id @default(cuid())
+  companyId     String
+  company       Company  @relation(fields: [companyId], references: [id])
+  entityType    String?
+  entityId      String?
+  title         String
+  fileName      String
+  mimeType      String
+  size          Int
   storageKey    String
   storageDriver String   @default("local")
   uploadedById  String?
-  createdAt    DateTime @default(now())
+  createdAt     DateTime @default(now())
 
   @@index([companyId])
   @@index([entityType, entityId])

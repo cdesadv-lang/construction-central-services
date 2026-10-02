@@ -11,10 +11,25 @@ import { optDate, optId, optStr, money, pct, reqDate, reqId, reqStr, optMoney, o
 
 const qty = z.coerce.number().positive().max(1e9);
 const prItem = z.object({ description: reqStr, unit: optStr, quantity: qty });
-const qItem = z.object({ requestItemId: optId, description: reqStr, quantity: qty, unitPrice: money });
+// Quotation lines must reference a line of the purchase request by id; description/quantity default from it.
+const qItem = z.object({ requestItemId: reqId, description: optStr, quantity: qty.optional(), unitPrice: money });
 const poItem = z.object({ description: reqStr, unit: optStr, quantity: qty, unitPrice: money });
 
 const prItems = (items: any[]) => items.map((i) => ({ description: i.description, unit: i.unit || "unit", quantity: i.quantity }));
+/** Validates quotation lines against the request's items (by id) and fills defaults. */
+async function quotationItems(tx: any, requestId: string, items: any[]) {
+  const reqItems = await tx.purchaseRequestItem.findMany({ where: { requestId } });
+  const byId = new Map<string, any>(reqItems.map((i: any) => [i.id, i]));
+  const seen = new Set<string>();
+  return items.map((it) => {
+    const ri = byId.get(it.requestItemId);
+    if (!ri) throw badRequest("Quotation line does not reference an item of this purchase request");
+    if (seen.has(ri.id)) throw badRequest(`Request item "${ri.description}" is quoted more than once`);
+    seen.add(ri.id);
+    return { requestItemId: ri.id, description: it.description || ri.description, quantity: it.quantity ?? ri.quantity, unitPrice: it.unitPrice };
+  });
+}
+
 const priced = (items: any[]) => items.map((i) => ({ ...i, unit: i.unit || "unit", total: r2(D(i.quantity).mul(D(i.unitPrice))) }));
 
 function poTotals(items: any[], taxPct: unknown) {
@@ -57,7 +72,12 @@ export const opsResources: Record<string, ResourceDef> = {
     include: { project: { select: { code: true, name: true } }, items: true, _count: { select: { quotations: true, orders: true } } },
     orderBy: [{ date: "desc" }],
     prepareCreate: async (_tx, ctx, data) => ({ ...data, createdById: ctx.user.id, items: { create: prItems(data.items) } }),
-    prepareUpdate: async (_tx, _ctx, _e, data) => (data.items ? { ...data, items: { deleteMany: {}, create: prItems(data.items) } } : data),
+    prepareUpdate: async (tx, _ctx, e, data) => {
+      if (!data.items) return data;
+      // Quotation lines reference request items by id, so items are locked once quotations exist.
+      if (await tx.quotation.count({ where: { requestId: e.id } })) throw unprocessable("Items cannot be changed after quotations were received — cancel the quotations or create a new request");
+      return { ...data, items: { deleteMany: {}, create: prItems(data.items) } };
+    },
     actions: {
       submit: {
         perm: "create",
@@ -93,12 +113,13 @@ export const opsResources: Record<string, ResourceDef> = {
     prepareCreate: async (tx, _ctx, data) => {
       const pr = await tx.purchaseRequest.findUnique({ where: { id: data.requestId } });
       if (!pr || ["CANCELLED", "CLOSED"].includes(pr.status)) throw unprocessable("Purchase request is closed or cancelled");
-      const items = priced(data.items);
+      const items = priced(await quotationItems(tx, data.requestId, data.items));
       return { ...data, total: sum(items.map((i) => i.total)), items: { create: items.map(({ unit: _u, ...i }) => i) } };
     },
-    prepareUpdate: async (_tx, _ctx, _e, data) => {
+    prepareUpdate: async (tx, _ctx, e, data) => {
       if (!data.items) return data;
-      const items = priced(data.items);
+      if (await tx.purchaseOrder.count({ where: { quotationId: e.id, status: { not: "CANCELLED" } } })) throw unprocessable("A purchase order was already created from this quotation");
+      const items = priced(await quotationItems(tx, e.requestId, data.items));
       return { ...data, total: sum(items.map((i) => i.total)), items: { deleteMany: {}, create: items.map(({ unit: _u, ...i }) => i) } };
     },
     afterCreate: async (tx, _ctx, row) => {
@@ -116,13 +137,16 @@ export const opsResources: Record<string, ResourceDef> = {
       "create-order": {
         perm: "create",
         run: async (tx, ctx, q) => {
-          const full = await tx.quotation.findUnique({ where: { id: q.id }, include: { items: true, request: true } });
+          const full = await tx.quotation.findUnique({ where: { id: q.id }, include: { items: { include: { requestItem: true } }, request: true } });
           if (!full) throw badRequest("Quotation not found");
           const existing = await tx.purchaseOrder.findFirst({ where: { quotationId: q.id, status: { not: "CANCELLED" } } });
           if (existing) throw unprocessable(`Purchase order ${existing.number} already exists for this quotation`);
           await tx.quotation.updateMany({ where: { requestId: q.requestId }, data: { selected: false } });
           await tx.quotation.update({ where: { id: q.id }, data: { selected: true } });
-          const t = poTotals(full.items.map((i) => ({ description: i.description, quantity: i.quantity, unitPrice: i.unitPrice })), 14);
+          const t = poTotals(
+            full.items.map((i) => ({ requestItemId: i.requestItemId, quotationItemId: i.id, description: i.description, unit: i.requestItem.unit, quantity: i.quantity, unitPrice: i.unitPrice })),
+            14,
+          );
           const po = await tx.purchaseOrder.create({
             data: {
               companyId: q.companyId,

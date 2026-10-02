@@ -343,7 +343,14 @@ export function buildConfigs(t: T): Record<string, ResourceConfig> {
       ],
       lines: {
         key: "items", label: t("f.items"), totals: [],
-        columns: [{ key: "description", required: true }, { key: "quantity", type: "number", required: true }, { key: "unitPrice", type: "money", required: true }],
+        columns: [
+          {
+            key: "requestItemId", label: t("f.requestItem"), type: "lookup", lookup: "purchase-request-items", required: true,
+            lookupParams: (v) => ({ requestId: v.requestId }),
+            onPick: (_v, _vals, picked) => (picked ? { description: picked.description, quantity: String(Number(picked.quantity)) } : {}),
+          },
+          { key: "description" }, { key: "quantity", type: "number", required: true }, { key: "unitPrice", type: "money", required: true },
+        ],
         fromRow: (r) => r.items.map((i: AnyRow) => ({ requestItemId: i.requestItemId, description: i.description, quantity: String(i.quantity), unitPrice: String(i.unitPrice) })),
         display: [{ key: "description" }, { key: "quantity", type: "number" }, { key: "unitPrice", type: "money" }, { key: "total", type: "money", total: true }],
       },

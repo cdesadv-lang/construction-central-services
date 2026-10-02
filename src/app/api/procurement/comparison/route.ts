@@ -15,8 +15,8 @@ export const GET = route(async ({ req, ctx }) => {
   if (!pr || !hasCompany(ctx, pr.companyId)) throw notFound();
   const rows = pr.items.map((it) => {
     const prices = pr.quotations.map((q) => {
-      const qi = q.items.find((x) => x.requestItemId === it.id) ?? q.items.find((x) => x.description === it.description);
-      return { quotationId: q.id, unitPrice: qi ? num(qi.unitPrice) : null, total: qi ? num(qi.total) : null };
+      const qi = q.items.find((x) => x.requestItemId === it.id); // linked by id (FK), never by description
+      return { quotationId: q.id, quotationItemId: qi?.id ?? null, quantity: qi ? num(qi.quantity) : null, unitPrice: qi ? num(qi.unitPrice) : null, total: qi ? num(qi.total) : null };
     });
     const valid = prices.filter((p) => p.unitPrice !== null);
     const best = valid.length ? valid.reduce((a, b) => (a.unitPrice! <= b.unitPrice! ? a : b)) : null;

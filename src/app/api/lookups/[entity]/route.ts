@@ -6,7 +6,7 @@ import { listParams, route } from "@/server/api";
 import { can, companyScope } from "@/server/context";
 
 /** Minimal id/label lists for form dropdowns. Allowed when the user can view ANY module that references the entity. */
-const LOOKUPS: Record<string, { model: string; modules: ModuleKey[]; select: any; label: (r: any) => string; orderBy: any; projectField?: string; where?: any; filters?: string[] }> = {
+const LOOKUPS: Record<string, { model: string; modules: ModuleKey[]; select: any; label: (r: any) => string; orderBy: any; projectField?: string; where?: any; filters?: string[]; scope?: (companyIds: string[]) => any }> = {
   projects: { model: "project", modules: ["projects", "accounting", "journals", "expenses", "contractors", "clientExtracts", "contractorExtracts", "procurement", "costing", "hr", "payroll", "treasury", "payments", "custody", "reports", "suppliers"], select: { id: true, code: true, name: true, clientId: true, contractValue: true, clientRetentionPct: true, clientTaxPct: true, clientInsurancePct: true }, label: (r) => `${r.code} - ${r.name}`, orderBy: { code: "asc" }, projectField: "id" },
   clients: { model: "client", modules: ["projects", "clientExtracts", "payments", "treasury", "reports"], select: { id: true, code: true, name: true }, label: (r) => `${r.code} - ${r.name}`, orderBy: { code: "asc" } },
   suppliers: { model: "supplier", modules: ["suppliers", "expenses", "procurement", "payments", "treasury", "journals", "reports"], select: { id: true, code: true, name: true, paymentTermsDays: true }, label: (r) => `${r.code} - ${r.name}`, orderBy: { code: "asc" } },
@@ -23,6 +23,7 @@ const LOOKUPS: Record<string, { model: string; modules: ModuleKey[]; select: any
   custodies: { model: "custody", modules: ["custody", "expenses"], select: { id: true, number: true, purpose: true, employeeId: true, amount: true }, label: (r) => `${r.number} - ${r.purpose}`, orderBy: { date: "desc" }, where: { status: "POSTED", settlementStatus: "OPEN" } },
   "purchase-requests": { model: "purchaseRequest", modules: ["procurement"], select: { id: true, number: true, status: true }, label: (r) => `${r.number} (${r.status})`, orderBy: { date: "desc" } },
   "purchase-orders": { model: "purchaseOrder", modules: ["procurement", "suppliers"], select: { id: true, number: true, supplierId: true, status: true, total: true }, label: (r) => `${r.number} (${r.status})`, orderBy: { date: "desc" } },
+  "purchase-request-items": { model: "purchaseRequestItem", modules: ["procurement"], select: { id: true, requestId: true, description: true, unit: true, quantity: true }, label: (r) => `${r.description} (${Number(r.quantity)} ${r.unit})`, orderBy: { id: "asc" }, filters: ["requestId"], scope: (ids) => ({ request: { companyId: { in: ids } } }) },
   departments: { model: "department", modules: ["hr"], select: { id: true, code: true, name: true }, label: (r) => r.name, orderBy: { code: "asc" } },
   positions: { model: "position", modules: ["hr"], select: { id: true, code: true, name: true }, label: (r) => r.name, orderBy: { code: "asc" } },
 };
@@ -32,13 +33,14 @@ export const GET = route<{ entity: string }>(async ({ req, ctx, params }) => {
   if (!def) throw notFound();
   if (!def.modules.some((m) => can(ctx, m, "view"))) throw forbidden();
   const p = listParams(req);
-  const where: any = { companyId: { in: companyScope(ctx, p.companyId) }, ...(def.where ?? {}) };
+  const ids = companyScope(ctx, p.companyId);
+  const where: any = { ...(def.scope ? def.scope(ids) : { companyId: { in: ids } }), ...(def.where ?? {}) };
   if (def.projectField && ctx.projectIds) where[def.projectField] = { in: ctx.projectIds };
   for (const f of def.filters ?? []) {
     const v = p.sp.get(f);
     if (v) where[f] = v === "true" ? true : v === "false" ? false : v;
   }
-  if (p.q) where.OR = Object.keys(def.select).filter((k) => ["code", "name", "number"].includes(k)).map((k) => ({ [k]: { contains: p.q, mode: "insensitive" } }));
-  const rows = await (prisma as any)[def.model].findMany({ where, select: { ...def.select, companyId: true }, orderBy: def.orderBy, take: 1000 });
+  if (p.q) where.OR = Object.keys(def.select).filter((k) => ["code", "name", "number", "description"].includes(k)).map((k) => ({ [k]: { contains: p.q, mode: "insensitive" } }));
+  const rows = await (prisma as any)[def.model].findMany({ where, select: { ...def.select, ...(def.scope ? {} : { companyId: true }) }, orderBy: def.orderBy, take: 1000 });
   return rows.map((r: any) => ({ ...r, label: def.label(r) }));
 });
