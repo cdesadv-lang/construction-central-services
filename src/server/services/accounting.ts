@@ -72,6 +72,7 @@ export const COA_TEMPLATE: TplAccount[] = [
   { code: "5203", name: "تأمينات مخصومة بمعرفة العملاء", nameEn: "Insurance Deducted by Clients", type: "EXPENSE", parent: "52", key: "CLIENT_INSURANCE_EXP" },
   { code: "5204", name: "خصومات العملاء", nameEn: "Client Deductions", type: "EXPENSE", parent: "52", key: "CLIENT_DEDUCTIONS_EXP" },
   { code: "5205", name: "مصروفات بنكية", nameEn: "Bank Charges", type: "EXPENSE", parent: "52", key: "BANK_CHARGES" },
+  { code: "5206", name: "فروق تغيير العملة", nameEn: "Foreign Exchange Differences", type: "EXPENSE", parent: "52", key: "FX_DIFFERENCES" },
 ];
 
 export const EXPENSE_TYPE_ACCOUNT: Record<ExpenseType, string> = {
@@ -135,6 +136,10 @@ export interface LineInput {
   description?: string | null;
   partyType?: string | null;
   partyId?: string | null;
+  /** foreign-currency tag: debit/credit are base (EGP); fxAmount is the original amount */
+  currency?: string | null;
+  fxAmount?: number | string | Prisma.Decimal | null;
+  exchangeRate?: number | string | Prisma.Decimal | null;
 }
 
 export interface EntryInput {
@@ -186,6 +191,7 @@ function lineData(companyId: string, entryProjectId: string | null | undefined, 
     description: l.description || null,
     partyType: l.partyType || null,
     partyId: l.partyId || null,
+    ...(l.currency && l.currency !== "EGP" ? { currency: l.currency, fxAmount: r2(D(l.fxAmount)), exchangeRate: D(l.exchangeRate ?? 1) } : {}),
   };
 }
 
@@ -289,6 +295,9 @@ export async function reverseJournalEntry(tx: Tx, ctx: Ctx | null, id: string, r
       description: l.description,
       partyType: l.partyType,
       partyId: l.partyId,
+      currency: l.currency,
+      fxAmount: l.fxAmount,
+      exchangeRate: l.exchangeRate,
     })),
   });
   await audit(tx, ctx, { action: "REVERSE", entity: "JournalEntry", entityId: id, companyId: e.companyId, after: { reversalId: rev.id, number: rev.number } });

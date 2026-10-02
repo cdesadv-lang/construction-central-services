@@ -7,6 +7,7 @@ import { DataTable } from "@/components/resource/table";
 import { ExtractPreview, JournalBalance, PartyStatement, ReportBlock } from "@/components/widgets";
 import { useLookup } from "@/components/resource/lookup";
 import { today } from "@/lib/client/format";
+import { CURRENCIES } from "@/lib/fx";
 import { ChequeLifecycle } from "./cheque-lifecycle";
 import { ProcurementComparison } from "./procurement-comparison";
 
@@ -25,7 +26,25 @@ const code = (r: AnyRow, k: string) => (r[k] ? `${r[k].code ?? r[k].number ?? ""
 const thisMonth = () => new Date().toISOString().slice(0, 7);
 
 export function buildConfigs(t: T): Record<string, ResourceConfig> {
+  // multi-currency: document currency + optional rate (blank = latest rate on/before the document date)
+  const fxForm: FieldDef[] = [
+    { key: "currency", label: t("x.currency"), type: "select", options: [...CURRENCIES], default: "EGP", required: true },
+    { key: "exchangeRate", label: t("x.exchangeRate"), type: "number", placeholder: t("x.rateAuto"), showIf: (v) => !!v.currency && v.currency !== "EGP" },
+  ];
+  const fxCol = { key: "currency", label: t("x.currency") };
+  const pickCurrency = (_v: unknown, _vals: AnyRow, p?: AnyRow) => (p?.currency ? { currency: p.currency, exchangeRate: "" } : undefined);
   return {
+    "exchange-rates": {
+      resource: "exchange-rates", module: "accounting", title: t("x.exchangeRates"), dateFilter: true,
+      columns: [{ key: "date", type: "date" }, { key: "currency" }, { key: "rate", type: "number", label: t("x.rateEgp") }, { key: "source", label: t("x.source") }],
+      form: [
+        { key: "currency", label: t("x.currency"), type: "select", options: CURRENCIES.filter((c) => c !== "EGP"), required: true, default: "USD", createOnly: true },
+        { key: "date", type: "date", required: true, default: today, createOnly: true },
+        { key: "rate", label: t("x.rateEgp"), type: "number", required: true },
+        { key: "source", label: t("x.source"), span: 2 },
+      ],
+      filters: [{ key: "currency", type: "select", options: CURRENCIES.filter((c) => c !== "EGP") }],
+    },
     companies: {
       resource: "companies", module: "companies", title: t("nav.companies"), global: true, noDelete: false,
       columns: [
@@ -141,14 +160,14 @@ export function buildConfigs(t: T): Record<string, ResourceConfig> {
       resource: "supplier-invoices", module: "suppliers", title: t("t.invoices"), doc: true, dateFilter: true, entityType: "supplierInvoice",
       columns: [
         { key: "number" }, { key: "supplierRef" }, { key: "date", type: "date" }, { key: "dueDate", type: "date" }, { key: "supplier.name", label: t("f.supplier") },
-        { key: "project", get: (r) => r.project?.code, label: t("f.project") }, { key: "category", type: "enum" }, { key: "subtotal", type: "money", total: true },
+        { key: "project", get: (r) => r.project?.code, label: t("f.project") }, { key: "category", type: "enum" }, fxCol, { key: "subtotal", type: "money", total: true },
         { key: "taxAmount", type: "money", total: true }, { key: "total", type: "money", total: true }, { key: "paidAmount", type: "money", total: true }, { key: "remaining", type: "money", total: true }, { key: "status", type: "status" },
       ],
       form: [
         { key: "supplierId", type: "lookup", lookup: "suppliers", required: true }, { key: "supplierRef" }, projectLookup,
         { key: "purchaseOrderId", type: "lookup", lookup: "purchase-orders", lookupParams: (v) => ({ supplierId: v.supplierId }) },
         { key: "date", type: "date", required: true, default: today }, { key: "dueDate", type: "date" }, { key: "category", type: "select", options: EXPENSE_TYPES, default: "MATERIALS", required: true },
-        { key: "subtotal", type: "money", required: true }, { key: "taxAmount", type: "money", default: 0 }, { key: "description", span: 3 },
+        { key: "subtotal", type: "money", required: true }, { key: "taxAmount", type: "money", default: 0 }, ...fxForm, { key: "description", span: 3 },
       ],
       filters: [statusFilter, { key: "supplierId", type: "lookup", lookup: "suppliers" }],
     },
@@ -219,15 +238,16 @@ export function buildConfigs(t: T): Record<string, ResourceConfig> {
       resource: "expenses", module: "expenses", title: t("t.expenses"), doc: true, dateFilter: true, entityType: "expense",
       columns: [
         { key: "number" }, { key: "date", type: "date" }, { key: "type", type: "enum" }, { key: "project", get: (r) => r.project?.code, label: t("f.project") },
-        { key: "amount", type: "money", total: true }, { key: "paymentMethod", type: "enum" }, { key: "supplier.name", label: t("f.supplier") }, { key: "employee.name", label: t("f.employee") },
+        fxCol, { key: "amount", type: "money", total: true }, { key: "paymentMethod", type: "enum" }, { key: "supplier.name", label: t("f.supplier") }, { key: "employee.name", label: t("f.employee") },
         { key: "costCenter.name", label: t("f.costCenter") }, { key: "description" }, { key: "status", type: "status" },
       ],
       form: [
         { key: "type", type: "select", options: EXPENSE_TYPES, required: true, default: "MATERIALS" }, { key: "date", type: "date", required: true, default: today },
         { key: "amount", type: "money", required: true }, projectLookup,
         { key: "paymentMethod", type: "select", options: ["CASH", "BANK", "CHEQUE", "CUSTODY", "CREDIT"], required: true, default: "CASH" },
-        { key: "cashBoxId", type: "lookup", lookup: "cash-boxes", required: true, showIf: (v) => v.paymentMethod === "CASH" },
-        { key: "bankAccountId", type: "lookup", lookup: "bank-accounts", required: true, showIf: (v) => v.paymentMethod === "BANK" || v.paymentMethod === "CHEQUE" },
+        { key: "cashBoxId", type: "lookup", lookup: "cash-boxes", required: true, showIf: (v) => v.paymentMethod === "CASH", onPick: pickCurrency },
+        { key: "bankAccountId", type: "lookup", lookup: "bank-accounts", required: true, showIf: (v) => v.paymentMethod === "BANK" || v.paymentMethod === "CHEQUE", onPick: pickCurrency },
+        ...fxForm,
         { key: "custodyId", type: "lookup", lookup: "custodies", required: true, showIf: (v) => v.paymentMethod === "CUSTODY", onPick: (_v, _x, p) => (p ? { employeeId: p.employeeId } : undefined) },
         { key: "supplierId", type: "lookup", lookup: "suppliers" }, { key: "employeeId", type: "lookup", lookup: "employees" },
         { key: "costCenterId", type: "lookup", lookup: "cost-centers" }, { key: "description", span: 2 },
@@ -263,17 +283,18 @@ export function buildConfigs(t: T): Record<string, ResourceConfig> {
         { key: "number" }, { key: "date", type: "date" }, { key: "type", type: "enum" }, { key: "method", type: "enum" },
         { key: "party", get: (r) => r.supplier?.name ?? r.contractor?.name ?? r.client?.name, label: t("f.party") },
         { key: "reference", get: (r) => r.supplierInvoice?.number ?? r.contractorExtract?.number ?? r.clientExtract?.number, label: t("f.reference") },
-        { key: "project", get: (r) => r.project?.code, label: t("f.project") }, { key: "chequeNumber" }, { key: "amount", type: "money", total: true }, { key: "status", type: "status" },
+        { key: "project", get: (r) => r.project?.code, label: t("f.project") }, { key: "chequeNumber" }, fxCol, { key: "amount", type: "money", total: true }, { key: "status", type: "status" },
       ],
       form: [
         { key: "type", type: "select", options: PAYMENT_TYPES, required: true, default: "SUPPLIER_PAYMENT" }, { key: "date", type: "date", required: true, default: today },
         { key: "amount", type: "money", required: true },
         { key: "method", type: "select", options: ["CASH", "BANK", "CHEQUE"], required: true, default: "BANK" },
-        { key: "cashBoxId", type: "lookup", lookup: "cash-boxes", required: true, showIf: (v) => v.method === "CASH" },
-        { key: "bankAccountId", type: "lookup", lookup: "bank-accounts", required: true, showIf: (v) => v.method === "BANK" || (v.method === "CHEQUE" && v.type !== "CLIENT_RECEIPT") },
+        { key: "cashBoxId", type: "lookup", lookup: "cash-boxes", required: true, showIf: (v) => v.method === "CASH", onPick: pickCurrency },
+        { key: "bankAccountId", type: "lookup", lookup: "bank-accounts", required: true, showIf: (v) => v.method === "BANK" || (v.method === "CHEQUE" && v.type !== "CLIENT_RECEIPT"), onPick: pickCurrency },
+        ...fxForm,
         { key: "chequeNumber", showIf: (v) => v.method === "CHEQUE", required: true }, { key: "chequeDueDate", type: "date", showIf: (v) => v.method === "CHEQUE" },
         { key: "supplierId", type: "lookup", lookup: "suppliers", required: true, showIf: (v) => v.type === "SUPPLIER_PAYMENT" },
-        { key: "supplierInvoiceId", type: "lookup", lookup: "supplier-invoices", lookupParams: (v) => ({ supplierId: v.supplierId }), showIf: (v) => v.type === "SUPPLIER_PAYMENT" },
+        { key: "supplierInvoiceId", type: "lookup", lookup: "supplier-invoices", lookupParams: (v) => ({ supplierId: v.supplierId }), showIf: (v) => v.type === "SUPPLIER_PAYMENT", onPick: pickCurrency },
         { key: "contractorId", type: "lookup", lookup: "contractors", required: true, showIf: (v) => v.type === "CONTRACTOR_PAYMENT" || v.type === "CONTRACTOR_ADVANCE" },
         { key: "contractorExtractId", type: "lookup", lookup: "contractor-extracts", lookupParams: (v) => ({ contractorId: v.contractorId }), showIf: (v) => v.type === "CONTRACTOR_PAYMENT" },
         { key: "clientId", type: "lookup", lookup: "clients", required: true, showIf: (v) => v.type === "CLIENT_RECEIPT" },
@@ -284,25 +305,25 @@ export function buildConfigs(t: T): Record<string, ResourceConfig> {
     },
     "cash-boxes": {
       resource: "cash-boxes", module: "treasury", title: t("t.cashboxes"),
-      columns: [{ key: "code" }, { key: "name" }, { key: "keeper" }, { key: "account", get: (r) => r.account?.code, label: t("f.account") }, { key: "balance", type: "money", total: true }],
-      form: [{ key: "code", placeholder: "AUTO", createOnly: true }, { key: "name", required: true }, { key: "keeper" }],
+      columns: [{ key: "code" }, { key: "name" }, { key: "keeper" }, fxCol, { key: "account", get: (r) => r.account?.code, label: t("f.account") }, { key: "fxBalance", type: "money", label: t("x.fxBalance") }, { key: "balance", type: "money", total: true, label: t("x.baseAmount") }],
+      form: [{ key: "code", placeholder: "AUTO", createOnly: true }, { key: "name", required: true }, { key: "keeper" }, { key: "currency", label: t("x.currency"), type: "select", options: [...CURRENCIES], default: "EGP", createOnly: true }],
     },
     "bank-accounts": {
       resource: "bank-accounts", module: "banks", title: t("t.bankAccounts"),
-      columns: [{ key: "code" }, { key: "bankName" }, { key: "branch" }, { key: "accountNumber" }, { key: "iban" }, { key: "currency" }, { key: "account", get: (r) => r.account?.code, label: t("f.account") }, { key: "balance", type: "money", total: true }],
-      form: [{ key: "code", placeholder: "AUTO", createOnly: true }, { key: "bankName", required: true }, { key: "branch" }, { key: "accountNumber", required: true }, { key: "iban" }, { key: "currency", default: "EGP", createOnly: true }],
+      columns: [{ key: "code" }, { key: "bankName" }, { key: "branch" }, { key: "accountNumber" }, { key: "iban" }, { key: "currency" }, { key: "account", get: (r) => r.account?.code, label: t("f.account") }, { key: "fxBalance", type: "money", label: t("x.fxBalance") }, { key: "balance", type: "money", total: true, label: t("x.baseAmount") }],
+      form: [{ key: "code", placeholder: "AUTO", createOnly: true }, { key: "bankName", required: true }, { key: "branch" }, { key: "accountNumber", required: true }, { key: "iban" }, { key: "currency", type: "select", options: [...CURRENCIES], default: "EGP", createOnly: true }],
     },
     "treasury-transactions": {
       resource: "treasury-transactions", module: "treasury", title: t("t.transactions"), doc: true, dateFilter: true, entityType: "treasuryTransaction",
-      columns: [{ key: "number" }, { key: "date", type: "date" }, { key: "kind", type: "enum" }, { key: "description" }, { key: "project", get: (r) => r.project?.code, label: t("f.project") }, { key: "amount", type: "money", total: true }, { key: "status", type: "status" }],
+      columns: [{ key: "number" }, { key: "date", type: "date" }, { key: "kind", type: "enum" }, { key: "description" }, { key: "project", get: (r) => r.project?.code, label: t("f.project") }, fxCol, { key: "amount", type: "money", total: true }, { key: "status", type: "status" }],
       form: [
         { key: "kind", type: "select", options: TREASURY_KINDS, required: true, default: "CASH_RECEIPT" }, { key: "date", type: "date", required: true, default: today }, { key: "amount", type: "money", required: true },
-        { key: "cashBoxId", type: "lookup", lookup: "cash-boxes", required: true, showIf: (v) => String(v.kind).startsWith("CASH") || v.kind === "BANK_DEPOSIT" || v.kind === "BANK_WITHDRAWAL" },
+        { key: "cashBoxId", type: "lookup", lookup: "cash-boxes", required: true, showIf: (v) => String(v.kind).startsWith("CASH") || v.kind === "BANK_DEPOSIT" || v.kind === "BANK_WITHDRAWAL", onPick: pickCurrency },
         { key: "toCashBoxId", type: "lookup", lookup: "cash-boxes", required: true, showIf: (v) => v.kind === "CASH_TRANSFER" },
-        { key: "bankAccountId", type: "lookup", lookup: "bank-accounts", required: true, showIf: (v) => String(v.kind).startsWith("BANK") },
+        { key: "bankAccountId", type: "lookup", lookup: "bank-accounts", required: true, showIf: (v) => String(v.kind).startsWith("BANK"), onPick: pickCurrency },
         { key: "toBankAccountId", type: "lookup", lookup: "bank-accounts", required: true, showIf: (v) => v.kind === "BANK_TRANSFER" },
         { key: "counterAccountId", type: "lookup", lookup: "accounts", lookupParams: () => ({ isPostable: "true" }), required: true, showIf: (v) => ["CASH_RECEIPT", "CASH_PAYMENT", "BANK_RECEIPT", "BANK_PAYMENT"].includes(v.kind) },
-        projectLookup, { key: "description", span: 2 },
+        ...fxForm, projectLookup, { key: "description", span: 2 },
       ],
       filters: [statusFilter, { key: "kind", type: "select", options: TREASURY_KINDS }],
     },
@@ -310,14 +331,15 @@ export function buildConfigs(t: T): Record<string, ResourceConfig> {
       resource: "cheques", module: "banks", title: t("t.cheques"), dateFilter: true, entityType: "cheque",
       columns: [
         { key: "number" }, { key: "type", type: "enum" }, { key: "bankAccount.bankName", label: t("f.bankName") }, { key: "partyName" }, { key: "drawerBank", label: t("x.drawerBank") },
-        { key: "issueDate", type: "date" }, { key: "dueDate", type: "date" }, { key: "amount", type: "money", total: true }, { key: "status", type: "status" },
+        { key: "issueDate", type: "date" }, { key: "dueDate", type: "date" }, fxCol, { key: "amount", type: "money", total: true }, { key: "status", type: "status" },
         { key: "paymentId", type: "bool", label: t("f.reference"), get: (r) => !!r.paymentId },
       ],
       form: [
         { key: "number", required: true, createOnly: true }, { key: "type", type: "select", options: ["ISSUED", "RECEIVED"], required: true, default: "RECEIVED", createOnly: true },
-        { key: "bankAccountId", type: "lookup", lookup: "bank-accounts", required: true, createOnly: true, showIf: (v) => v.type === "ISSUED" },
+        { key: "bankAccountId", type: "lookup", lookup: "bank-accounts", required: true, createOnly: true, showIf: (v) => v.type === "ISSUED", onPick: pickCurrency },
         { key: "drawerBank", label: t("x.drawerBank"), showIf: (v) => v.type === "RECEIVED" },
         { key: "amount", type: "money", required: true, createOnly: true },
+        ...fxForm.map((f) => ({ ...f, createOnly: true })),
         { key: "issueDate", type: "date", required: true, default: today, createOnly: true }, { key: "dueDate", type: "date", required: true },
         { key: "partyType", type: "select", options: ["CLIENT", "SUPPLIER", "CONTRACTOR", "OTHER"], createOnly: true, default: "CLIENT" },
         { key: "partyId", type: "lookup", lookup: "clients", createOnly: true, showIf: (v) => v.partyType === "CLIENT", onPick: (_v, _vals, p) => (p ? { partyName: p.name } : {}) },

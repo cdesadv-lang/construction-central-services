@@ -8,6 +8,8 @@ import { TabbedPage } from "@/components/tabbed";
 import { Money, Stat } from "@/components/ui";
 import { LookupSelect } from "@/components/resource/lookup";
 import { ReportBlock, useReport } from "@/components/widgets";
+import { ResourcePage } from "@/components/resource/resource-page";
+import { useCfg } from "@/ui/configs";
 
 function Overview() {
   const { t, companyId } = useApp();
@@ -50,6 +52,7 @@ function Ledger() {
 
 export default function Page() {
   const { t, companyId } = useApp();
+  const fx = useCfg("exchange-rates");
   return (
     <TabbedPage
       title={t("nav.accounting")}
@@ -59,6 +62,7 @@ export default function Page() {
         { key: "ledger", label: t("t.ledger"), module: "reports", render: () => <Ledger /> },
         { key: "bs", label: t("r.balance-sheet"), module: "reports", render: () => <div className="card p-2"><ReportBlock report="balance-sheet" params={{ companyId }} /></div> },
         { key: "cf", label: t("r.cash-flow"), module: "reports", render: () => <div className="card p-2"><ReportBlock report="cash-flow" params={{ companyId }} /></div> },
+        { key: "fx", label: t("x.exchangeRates"), module: "accounting", render: () => <ResourcePage cfg={fx} embedded /> },
       ]}
     />
   );

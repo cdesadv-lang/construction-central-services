@@ -256,6 +256,9 @@ model Company {
   contractEnd        DateTime?
   servicePackage     ServicePackage @default(STANDARD)
   status             CompanyStatus  @default(ACTIVE)
+  /// base (functional) currency of the books — only EGP is supported for posting
+  baseCurrency       String         @default("EGP") @db.VarChar(3)
+  exchangeRates      ExchangeRate[]
   createdAt          DateTime       @default(now())
   updatedAt          DateTime       @updatedAt
 
@@ -457,6 +460,10 @@ model JournalEntry {
 model JournalLine {
   id               String       @id @default(cuid())
   companyId        String
+  /// set when the source document is in a foreign currency: debit/credit are EGP, fxAmount is the original amount
+  currency         String?      @db.VarChar(3)
+  fxAmount         Decimal?     @db.Decimal(18, 2)
+  exchangeRate     Decimal?     @db.Decimal(18, 6)
   company          Company      @relation(fields: [companyId], references: [id])
   entryId          String
   entry            JournalEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
@@ -592,6 +599,9 @@ model SupplierInvoice {
   subtotal        Decimal        @default(0) @db.Decimal(18, 2)
   taxAmount       Decimal        @default(0) @db.Decimal(18, 2)
   total           Decimal        @default(0) @db.Decimal(18, 2)
+  currency        String         @default("EGP") @db.VarChar(3)
+  /// EGP per 1 unit of currency (snapshot taken from the exchange-rate table unless entered)
+  exchangeRate    Decimal        @default(1) @db.Decimal(18, 6)
   paidAmount      Decimal        @default(0) @db.Decimal(18, 2)
   status          DocStatus      @default(DRAFT)
   journalEntryId  String?
@@ -724,6 +734,7 @@ model ClientExtract {
 model CashBox {
   id        String   @id @default(cuid())
   companyId String
+  currency  String   @default("EGP") @db.VarChar(3)
   company   Company  @relation(fields: [companyId], references: [id])
   code      String
   name      String
@@ -769,6 +780,9 @@ model Payment {
   type                PaymentType
   date                DateTime
   amount              Decimal            @db.Decimal(18, 2)
+  currency            String             @default("EGP") @db.VarChar(3)
+  /// EGP per 1 unit of currency (snapshot taken from the exchange-rate table unless entered)
+  exchangeRate        Decimal            @default(1) @db.Decimal(18, 6)
   method              PaymentMethod
   cashBoxId           String?
   cashBox             CashBox?           @relation(fields: [cashBoxId], references: [id])
@@ -808,6 +822,9 @@ model TreasuryTransaction {
   kind             TreasuryKind
   date             DateTime
   amount           Decimal      @db.Decimal(18, 2)
+  currency         String       @default("EGP") @db.VarChar(3)
+  /// EGP per 1 unit of currency (snapshot taken from the exchange-rate table unless entered)
+  exchangeRate     Decimal      @default(1) @db.Decimal(18, 6)
   cashBoxId        String?
   toCashBoxId      String?
   bankAccountId    String?
@@ -836,6 +853,9 @@ model Cheque {
   bankAccount      BankAccount?     @relation(fields: [bankAccountId], references: [id])
   drawerBank       String?
   amount           Decimal          @db.Decimal(18, 2)
+  currency         String           @default("EGP") @db.VarChar(3)
+  /// EGP per 1 unit of currency (snapshot taken from the exchange-rate table unless entered)
+  exchangeRate     Decimal          @default(1) @db.Decimal(18, 6)
   issueDate        DateTime
   dueDate          DateTime
   partyName        String
@@ -905,6 +925,9 @@ model Expense {
   type           ExpenseType
   date           DateTime
   amount         Decimal       @db.Decimal(18, 2)
+  currency       String        @default("EGP") @db.VarChar(3)
+  /// EGP per 1 unit of currency (snapshot taken from the exchange-rate table unless entered)
+  exchangeRate   Decimal       @default(1) @db.Decimal(18, 6)
   paymentMethod  PaymentMethod
   cashBoxId      String?
   cashBox        CashBox?      @relation(fields: [cashBoxId], references: [id])
@@ -1397,4 +1420,21 @@ model PayrollSettings {
   updatedById             String?
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
+}
+
+/// Exchange rates to the base currency (EGP per 1 unit), per company and day.
+model ExchangeRate {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  currency    String   @db.VarChar(3)
+  date        DateTime @db.Date
+  rate        Decimal  @db.Decimal(18, 6)
+  source      String?
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([companyId, currency, date])
+  @@index([companyId, currency, date])
 }

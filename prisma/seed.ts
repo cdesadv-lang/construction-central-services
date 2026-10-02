@@ -583,6 +583,26 @@ async function main() {
     // issued cheque to a supplier, not yet presented
     await create(treasuryCtx, "cheques", { ...C, number: String(990300 + clients.length), type: "ISSUED", bankAccountId: banks[1 % banks.length].id, amount: 64_000, issueDate: "2026-09-18", dueDate: "2026-10-05", partyName: suppliers[0].name, partyType: "SUPPLIER", partyId: suppliers[0].id, counterAccountId: apId });
 
+    // Multi-currency demo: monthly demo rates, a USD bank account funded in USD, a USD import invoice
+    // paid a month later at a different rate (realized FX difference posted automatically).
+    const rateRows: { companyId: string; currency: string; date: Date; rate: number; source: string }[] = [];
+    for (let i = 0; i < 22; i++) {
+      const date = new Date(Date.UTC(2025, i, 1));
+      const usd = Math.round((50.6 - 0.12 * i) * 10000) / 10000;
+      const src = "أسعار توضيحية للعرض (ليست أسعار البنك المركزي الرسمية)";
+      rateRows.push({ ...C, currency: "USD", date, rate: usd, source: src });
+      rateRows.push({ ...C, currency: "EUR", date, rate: Math.round(usd * (1.08 + 0.004 * i) * 10000) / 10000, source: src });
+      rateRows.push({ ...C, currency: "SAR", date, rate: Math.round((usd / 3.75) * 10000) / 10000, source: src });
+    }
+    await prisma.exchangeRate.createMany({ data: rateRows });
+    const usdBank = await create(admin, "bank-accounts", { ...C, bankName: "البنك التجاري الدولي CIB", branch: "الحساب الدولاري", accountNumber: `USD-${s.banks[0][2]}`, currency: "USD" });
+    const usdIn = await create(treasuryCtx, "treasury-transactions", { ...C, kind: "BANK_RECEIPT", date: "2026-07-05", amount: 60_000, currency: "USD", bankAccountId: usdBank.id, counterAccountId: await accountIdByKey(prisma, co.id, "CAPITAL"), description: "زيادة رأس المال بالدولار" });
+    await post("treasury-transactions", usdIn.id, treasuryCtx);
+    const usdInv = await create(acc, "supplier-invoices", { ...C, supplierId: suppliers[1 % suppliers.length].id, projectId: active[0].id, date: "2026-07-20", category: "EQUIPMENT", currency: "USD", subtotal: 12_000, taxAmount: 0, supplierRef: "IMP-USD-01", description: "استيراد قطع غيار معدات (بالدولار)" });
+    await post("supplier-invoices", usdInv.id, acc);
+    const usdPay = await create(acc, "payments", { ...C, type: "SUPPLIER_PAYMENT", date: "2026-08-20", amount: 12_000, currency: "USD", method: "BANK", bankAccountId: usdBank.id, supplierInvoiceId: usdInv.id, description: "سداد فاتورة الاستيراد من الحساب الدولاري" });
+    await post("payments", usdPay.id, acc);
+
     // Items awaiting approval (to populate approval inbox) and drafts
     const pendingJe = await create(acc, "journal-entries", {
       ...C, date: "2026-09-25", description: "قيد تسوية - استحقاق إيجار معدات سبتمبر", projectId: active[0].id,
@@ -629,6 +649,8 @@ async function main() {
   const counts = {
     companies: await prisma.company.count(),
     closedPeriods: await prisma.accountingPeriod.count({ where: { status: "CLOSED" } }),
+    exchangeRates: await prisma.exchangeRate.count(),
+    fxJournalLines: await prisma.journalLine.count({ where: { currency: { not: null } } }),
     projects: await prisma.project.count(),
     journalEntries: await prisma.journalEntry.count(),
     postedEntries: await prisma.journalEntry.count({ where: { status: "POSTED" } }),

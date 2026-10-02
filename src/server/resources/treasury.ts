@@ -7,7 +7,9 @@ import { createChildAccount } from "../services/accounting";
 import { settleCustody } from "../services/posting";
 import { allowedActions, chequeTransition, createStandaloneCheque, type ChequeAction } from "../services/cheques";
 import type { ResourceDef } from "./engine";
-import { optDate, optId, optStr, money, reqDate, reqId, reqStr } from "./z";
+import { optDate, optId, optStr, money, reqDate, reqId, reqStr, currency, fxFields } from "./z";
+import { resolveDocFx } from "../services/fx";
+import { fxBalance } from "@/lib/fx";
 
 const EXPENSE_TYPES = ["MATERIALS", "LABOR", "EQUIPMENT", "TRANSPORT", "FUEL", "RENT", "CONTRACTORS", "ADMIN", "OTHER"] as const;
 const METHODS = ["CASH", "BANK", "CHEQUE", "CUSTODY", "CREDIT"] as const;
@@ -15,6 +17,20 @@ const METHODS = ["CASH", "BANK", "CHEQUE", "CUSTODY", "CREDIT"] as const;
 async function balancesFor(accountIds: string[]) {
   const sums = await prisma.journalLine.groupBy({ by: ["accountId"], where: { accountId: { in: accountIds }, entry: { status: "POSTED" } }, _sum: { debit: true, credit: true } });
   return new Map(sums.map((s) => [s.accountId, D(s._sum.debit).minus(D(s._sum.credit))]));
+}
+
+/** balance in EGP + (for foreign-currency accounts) balance in the account currency */
+async function decorateMoneyAccounts(rows: any[]) {
+  const m = await balancesFor(rows.map((r) => r.accountId));
+  const foreign = rows.filter((r) => r.currency && r.currency !== "EGP");
+  const fxLines = foreign.length
+    ? await prisma.journalLine.findMany({ where: { accountId: { in: foreign.map((r) => r.accountId) }, entry: { status: "POSTED" } }, select: { accountId: true, debit: true, credit: true, fxAmount: true, currency: true } })
+    : [];
+  return rows.map((r) => ({
+    ...r,
+    balance: (m.get(r.accountId) ?? D(0)).toFixed(2),
+    fxBalance: r.currency && r.currency !== "EGP" ? fxBalance(fxLines.filter((l) => l.accountId === r.accountId), r.currency).toFixed(2) : (m.get(r.accountId) ?? D(0)).toFixed(2),
+  }));
 }
 
 function checkMethod(data: any, partial = false) {
@@ -42,6 +58,7 @@ const expenseFields = {
   costCenterId: optId,
   documentId: optId,
   description: optStr,
+  ...fxFields,
 };
 
 const paymentFields = {
@@ -62,6 +79,7 @@ const paymentFields = {
   clientId: optId,
   clientExtractId: optId,
   description: optStr,
+  ...fxFields,
 };
 
 async function fillPaymentParties(tx: any, data: any) {
@@ -105,6 +123,7 @@ const treasuryFields = {
   counterAccountId: optId,
   projectId: optId,
   description: optStr,
+  ...fxFields,
 };
 
 export const treasuryResources: Record<string, ResourceDef> = {
@@ -132,6 +151,7 @@ export const treasuryResources: Record<string, ResourceDef> = {
     orderBy: [{ date: "desc" }],
     prepareCreate: async (tx, _ctx, data) => {
       checkMethod(data);
+      await resolveDocFx(tx, data.companyId, data);
       if (data.custodyId) {
         const c = await tx.custody.findUnique({ where: { id: data.custodyId } });
         data.employeeId ??= c?.employeeId;
@@ -143,9 +163,9 @@ export const treasuryResources: Record<string, ResourceDef> = {
       }
       return data;
     },
-    prepareUpdate: async (_tx, _ctx, existing, data) => {
+    prepareUpdate: async (tx, _ctx, existing, data) => {
       checkMethod({ ...existing, ...data });
-      return data;
+      return resolveDocFx(tx, existing.companyId, data, existing);
     },
   },
   custodies: {
@@ -207,31 +227,30 @@ export const treasuryResources: Record<string, ResourceDef> = {
       bankAccount: { select: { bankName: true, accountNumber: true } },
     },
     orderBy: [{ date: "desc" }],
-    prepareCreate: async (tx, _ctx, data) => fillPaymentParties(tx, data),
+    prepareCreate: async (tx, _ctx, data) => resolveDocFx(tx, data.companyId, await fillPaymentParties(tx, data)),
     prepareUpdate: async (tx, _ctx, existing, data) => {
       const merged = await fillPaymentParties(tx, { ...existing, ...data });
       const out: any = {};
-      for (const k of Object.keys(paymentFields)) if (k !== "number") out[k] = merged[k];
-      return out;
+      for (const k of Object.keys(paymentFields)) if (k !== "number" && k !== "currency" && k !== "exchangeRate") out[k] = merged[k];
+      if (data.currency !== undefined) out.currency = data.currency;
+      if (data.exchangeRate !== undefined) out.exchangeRate = data.exchangeRate;
+      return resolveDocFx(tx, existing.companyId, out, existing);
     },
   },
   "cash-boxes": {
     model: "cashBox",
     module: "treasury",
-    create: z.object({ code: optStr, name: reqStr, keeper: optStr }),
+    create: z.object({ code: optStr, name: reqStr, keeper: optStr, currency }),
     update: z.object({ name: reqStr, keeper: optStr }).partial(),
     search: ["code", "name", "keeper"],
     numbering: { key: "CB", prefix: "CB", field: "code" },
     include: { account: { select: { code: true, name: true } } },
     orderBy: { code: "asc" },
     prepareCreate: async (tx, _ctx, data) => {
-      const acc = await createChildAccount(tx, data.companyId, "CASH_PARENT", data.name);
-      return { ...data, accountId: acc.id };
+      const acc = await createChildAccount(tx, data.companyId, "CASH_PARENT", data.currency && data.currency !== "EGP" ? `${data.name} (${data.currency})` : data.name);
+      return { ...data, currency: data.currency ?? "EGP", accountId: acc.id };
     },
-    decorate: async (rows) => {
-      const m = await balancesFor(rows.map((r) => r.accountId));
-      return rows.map((r) => ({ ...r, balance: (m.get(r.accountId) ?? D(0)).toFixed(2) }));
-    },
+    decorate: decorateMoneyAccounts,
     canDelete: async (tx, row) => ((await tx.journalLine.count({ where: { accountId: row.accountId } })) ? "Cash box has transactions" : null),
     afterDelete: async (tx, row) => {
       await tx.account.delete({ where: { id: row.accountId } });
@@ -240,20 +259,17 @@ export const treasuryResources: Record<string, ResourceDef> = {
   "bank-accounts": {
     model: "bankAccount",
     module: "banks",
-    create: z.object({ code: optStr, bankName: reqStr, branch: optStr, accountNumber: reqStr, iban: optStr, currency: optStr }),
+    create: z.object({ code: optStr, bankName: reqStr, branch: optStr, accountNumber: reqStr, iban: optStr, currency }),
     update: z.object({ bankName: reqStr, branch: optStr, accountNumber: reqStr, iban: optStr }).partial(),
     search: ["code", "bankName", "accountNumber", "iban"],
     numbering: { key: "BNK", prefix: "BNK", field: "code" },
     include: { account: { select: { code: true, name: true } } },
     orderBy: { code: "asc" },
     prepareCreate: async (tx, _ctx, data) => {
-      const acc = await createChildAccount(tx, data.companyId, "BANK_PARENT", `${data.bankName} - ${data.accountNumber}`);
+      const acc = await createChildAccount(tx, data.companyId, "BANK_PARENT", `${data.bankName} - ${data.accountNumber}${data.currency && data.currency !== "EGP" ? ` (${data.currency})` : ""}`);
       return { ...data, currency: data.currency ?? "EGP", accountId: acc.id };
     },
-    decorate: async (rows) => {
-      const m = await balancesFor(rows.map((r) => r.accountId));
-      return rows.map((r) => ({ ...r, balance: (m.get(r.accountId) ?? D(0)).toFixed(2) }));
-    },
+    decorate: decorateMoneyAccounts,
     canDelete: async (tx, row) => ((await tx.journalLine.count({ where: { accountId: row.accountId } })) ? "Bank account has transactions" : null),
     afterDelete: async (tx, row) => {
       await tx.account.delete({ where: { id: row.accountId } });
@@ -273,7 +289,9 @@ export const treasuryResources: Record<string, ResourceDef> = {
     numbering: { key: "TRX", prefix: "TRX" },
     include: { project: { select: { code: true, name: true } } },
     orderBy: [{ date: "desc" }],
-    prepareCreate: async (_tx, _ctx, data) => {
+    prepareUpdate: async (tx, _ctx, existing, data) => resolveDocFx(tx, existing.companyId, data, existing),
+    prepareCreate: async (tx, _ctx, data) => {
+      await resolveDocFx(tx, data.companyId, data);
       const k: string = data.kind;
       const need = (f: string, label: string) => {
         if (!data[f]) throw badRequest(`${label} is required for ${k}`);
@@ -303,6 +321,7 @@ export const treasuryResources: Record<string, ResourceDef> = {
       partyId: optId,
       counterAccountId: reqId,
       notes: optStr,
+      ...fxFields,
     }),
     update: z.object({ dueDate: reqDate, drawerBank: optStr, notes: optStr }).partial(),
     search: ["number", "partyName", "drawerBank"],

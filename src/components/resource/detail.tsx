@@ -14,6 +14,7 @@ export function JournalLines({ entry }: { entry: AnyRow }) {
   if (!entry) return null;
   const td = entry.lines.reduce((s: number, l: AnyRow) => s + Number(l.debit), 0);
   const tc = entry.lines.reduce((s: number, l: AnyRow) => s + Number(l.credit), 0);
+  const hasFx = entry.lines.some((l: AnyRow) => l.currency);
   return (
     <div className="mt-5">
       <h4 className="mb-2 flex items-center gap-2 font-bold text-slate-700">
@@ -28,6 +29,7 @@ export function JournalLines({ entry }: { entry: AnyRow }) {
               <th>{t("f.description")}</th>
               <th className="text-end">{t("f.debit")}</th>
               <th className="text-end">{t("f.credit")}</th>
+              {hasFx && <th className="text-end">{t("x.fxAmount")}</th>}
             </tr>
           </thead>
           <tbody>
@@ -39,6 +41,7 @@ export function JournalLines({ entry }: { entry: AnyRow }) {
                 <td className="text-slate-600">{l.description}</td>
                 <td className="text-end">{Number(l.debit) ? <Money value={l.debit} /> : ""}</td>
                 <td className="text-end">{Number(l.credit) ? <Money value={l.credit} /> : ""}</td>
+                {hasFx && <td className="text-end num text-slate-600">{l.currency ? `${Number(l.fxAmount).toLocaleString("en-US", { minimumFractionDigits: 2 })} ${l.currency} @ ${Number(l.exchangeRate)}` : ""}</td>}
               </tr>
             ))}
           </tbody>
@@ -47,6 +50,7 @@ export function JournalLines({ entry }: { entry: AnyRow }) {
               <td colSpan={2}>{t("c.total")}</td>
               <td className="text-end"><Money value={td} /></td>
               <td className="text-end"><Money value={tc} /></td>
+              {hasFx && <td />}
             </tr>
           </tfoot>
         </table>

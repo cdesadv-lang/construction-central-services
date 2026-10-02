@@ -5,7 +5,8 @@ import { D, r2 } from "@/lib/money";
 import { badRequest } from "@/lib/errors";
 import { computeClientExtract, computeContractorExtract } from "../services/posting";
 import type { ResourceDef } from "./engine";
-import { optDate, optId, optStr, money, pct, reqDate, reqId, reqStr, optMoney, optInt } from "./z";
+import { optDate, optId, optStr, money, pct, reqDate, reqId, reqStr, optMoney, optInt, fxFields } from "./z";
+import { resolveDocFx } from "../services/fx";
 
 const EXPENSE_TYPES = ["MATERIALS", "LABOR", "EQUIPMENT", "TRANSPORT", "FUEL", "RENT", "CONTRACTORS", "ADMIN", "OTHER"] as const;
 
@@ -82,9 +83,10 @@ export const partyResources: Record<string, ResourceDef> = {
       description: optStr,
       subtotal: money,
       taxAmount: optMoney,
+      ...fxFields,
     }),
     update: z
-      .object({ supplierRef: optStr, supplierId: reqId, projectId: optId, purchaseOrderId: optId, date: reqDate, dueDate: optDate, category: z.enum(EXPENSE_TYPES), description: optStr, subtotal: money, taxAmount: optMoney })
+      .object({ supplierRef: optStr, supplierId: reqId, projectId: optId, purchaseOrderId: optId, date: reqDate, dueDate: optDate, category: z.enum(EXPENSE_TYPES), description: optStr, subtotal: money, taxAmount: optMoney, ...fxFields })
       .partial(),
     search: ["number", "supplierRef", "description", "supplier.name"],
     filters: ["status", "supplierId", "projectId", "category"],
@@ -98,12 +100,12 @@ export const partyResources: Record<string, ResourceDef> = {
       const s = await tx.supplier.findUnique({ where: { id: data.supplierId } });
       const total = r2(D(data.subtotal).plus(D(data.taxAmount)));
       const dueDate = data.dueDate ?? new Date(new Date(data.date).getTime() + (s?.paymentTermsDays ?? 30) * 86400000);
-      return { ...data, total, dueDate };
+      return resolveDocFx(tx, data.companyId, { ...data, total, dueDate });
     },
-    prepareUpdate: async (_tx, _ctx, existing, data) => {
+    prepareUpdate: async (tx, _ctx, existing, data) => {
       const subtotal = data.subtotal ?? existing.subtotal;
       const tax = data.taxAmount ?? existing.taxAmount;
-      return { ...data, total: r2(D(subtotal).plus(D(tax))) };
+      return resolveDocFx(tx, existing.companyId, { ...data, total: r2(D(subtotal).plus(D(tax))) }, existing);
     },
     decorate: async (rows) => rows.map((r) => ({ ...r, remaining: D(r.total).minus(D(r.paidAmount)).toFixed(2) })),
   },

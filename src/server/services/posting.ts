@@ -16,21 +16,26 @@ import {
 } from "./accounting";
 import { DOC_TYPES, type DocType } from "./doctypes";
 import { cancelPaymentCheque, registerPaymentCheque } from "./cheques";
+import { convertLines, FxError, isForeign, toBase } from "@/lib/fx";
+import { assertSameCurrency } from "./fx";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const delegate = (tx: Tx, docType: DocType) => (tx as any)[DOC_TYPES[docType].model];
 
-async function moneyAccount(tx: Tx, companyId: string, method: PaymentMethod, cashBoxId?: string | null, bankAccountId?: string | null) {
+/** GL account of a cash box / bank account; its currency must equal the document currency. */
+async function moneyAccount(tx: Tx, companyId: string, method: PaymentMethod, cashBoxId?: string | null, bankAccountId?: string | null, currency = "EGP") {
   if (method === "CASH") {
     if (!cashBoxId) throw badRequest("Cash box is required for cash method");
     const cb = await tx.cashBox.findFirst({ where: { id: cashBoxId, companyId } });
     if (!cb) throw badRequest("Cash box not found in this company");
+    assertSameCurrency(`Cash box ${cb.name}`, cb.currency, currency);
     return cb.accountId;
   }
   if (method === "BANK" || method === "CHEQUE") {
     if (!bankAccountId) throw badRequest("Bank account is required for bank/cheque method");
     const b = await tx.bankAccount.findFirst({ where: { id: bankAccountId, companyId } });
     if (!b) throw badRequest("Bank account not found in this company");
+    assertSameCurrency(`Bank account ${b.bankName} ${b.accountNumber}`, b.currency, currency);
     return b.accountId;
   }
   throw badRequest(`Payment method ${method} is not valid here`);
@@ -58,8 +63,9 @@ export async function contractorAdvanceBalance(tx: Tx, companyId: string, contra
 }
 
 /** Builds journal lines + description for a document. Throws on business-rule violations. */
-async function buildEntry(tx: Tx, docType: DocType, doc: any): Promise<{ lines: LineInput[]; description: string; projectId?: string | null; date: Date }> {
+async function buildEntry(tx: Tx, docType: DocType, doc: any): Promise<{ lines: LineInput[]; description: string; projectId?: string | null; date: Date; converted?: boolean }> {
   const c = doc.companyId as string;
+  const cur: string = doc.currency ?? "EGP";
   const acc = (k: string) => accountIdByKey(tx, c, k);
   switch (docType) {
     case "EXPENSE": {
@@ -68,6 +74,7 @@ async function buildEntry(tx: Tx, docType: DocType, doc: any): Promise<{ lines: 
       const debit = await acc(EXPENSE_TYPE_ACCOUNT[doc.type as keyof typeof EXPENSE_TYPE_ACCOUNT]);
       let credit: LineInput;
       if (doc.paymentMethod === "CUSTODY") {
+        if (isForeign(cur)) throw unprocessable("Custody expenses must be in EGP (custody is paid from an EGP cash box)");
         if (!doc.custodyId) throw badRequest("Custody is required for custody payment method");
         const { custody, remaining } = await custodyRemaining(tx, doc.custodyId, doc.id);
         if (custody.companyId !== c) throw badRequest("Custody belongs to another company");
@@ -78,7 +85,7 @@ async function buildEntry(tx: Tx, docType: DocType, doc: any): Promise<{ lines: 
         if (!doc.supplierId) throw badRequest("Supplier is required for credit (on-account) expenses");
         credit = { accountId: await acc("AP_SUPPLIERS"), credit: amount, partyType: "SUPPLIER", partyId: doc.supplierId };
       } else {
-        credit = { accountId: await moneyAccount(tx, c, doc.paymentMethod, doc.cashBoxId, doc.bankAccountId), credit: amount };
+        credit = { accountId: await moneyAccount(tx, c, doc.paymentMethod, doc.cashBoxId, doc.bankAccountId, cur), credit: amount };
       }
       return {
         date: doc.date,
@@ -110,12 +117,12 @@ async function buildEntry(tx: Tx, docType: DocType, doc: any): Promise<{ lines: 
       const money =
         doc.method === "CHEQUE"
           ? await acc(doc.type === "CLIENT_RECEIPT" ? "NOTES_RECEIVABLE" : "NOTES_PAYABLE")
-          : await moneyAccount(tx, c, doc.method, doc.cashBoxId, doc.bankAccountId);
+          : await moneyAccount(tx, c, doc.method, doc.cashBoxId, doc.bankAccountId, cur);
       if (doc.method === "CHEQUE") {
         if (!doc.chequeNumber) throw badRequest("Cheque number is required");
         if (doc.type !== "CLIENT_RECEIPT") {
           if (!doc.bankAccountId) throw badRequest("Bank account (drawn on) is required for issued cheques");
-          await moneyAccount(tx, c, "BANK", null, doc.bankAccountId); // validates company
+          await moneyAccount(tx, c, "BANK", null, doc.bankAccountId, cur); // validates company + currency
         }
       }
       if (doc.type === "SUPPLIER_PAYMENT") {
@@ -124,8 +131,29 @@ async function buildEntry(tx: Tx, docType: DocType, doc: any): Promise<{ lines: 
           const inv = await tx.supplierInvoice.findUnique({ where: { id: doc.supplierInvoiceId } });
           if (!inv || inv.companyId !== c || inv.supplierId !== doc.supplierId) throw badRequest("Invoice does not match supplier/company");
           if (inv.status !== "POSTED") throw unprocessable("Invoice must be posted before payment");
+          if (inv.currency !== cur) throw unprocessable(`Payment currency (${cur}) must match the invoice currency (${inv.currency})`);
           const rem = D(inv.total).minus(D(inv.paidAmount));
           if (amount.greaterThan(rem)) throw unprocessable(`Amount exceeds invoice remaining (${rem.toFixed(2)})`);
+          if (isForeign(cur) && !D(inv.exchangeRate).equals(D(doc.exchangeRate))) {
+            // settle the payable at the invoice rate, pay at today's rate; the difference is a realized FX gain/loss
+            const apBase = toBase(amount, inv.exchangeRate);
+            const payBase = toBase(amount, doc.exchangeRate);
+            const diff = payBase.minus(apBase);
+            const fx = { currency: cur, fxAmount: amount };
+            return {
+              date: doc.date,
+              projectId: doc.projectId,
+              description: `سداد مورد ${doc.number} (${cur})`,
+              converted: true,
+              lines: [
+                { accountId: await acc("AP_SUPPLIERS"), debit: apBase, partyType: "SUPPLIER", partyId: doc.supplierId, ...fx, exchangeRate: inv.exchangeRate },
+                { accountId: money, credit: payBase, ...fx, exchangeRate: doc.exchangeRate },
+                diff.greaterThan(0)
+                  ? { accountId: await acc("FX_DIFFERENCES"), debit: diff, description: "خسائر فروق عملة محققة" }
+                  : { accountId: await acc("FX_DIFFERENCES"), credit: diff.abs(), description: "أرباح فروق عملة محققة" },
+              ].filter(nz),
+            };
+          }
         }
         return {
           date: doc.date,
@@ -143,6 +171,7 @@ async function buildEntry(tx: Tx, docType: DocType, doc: any): Promise<{ lines: 
           const ex = await tx.contractorExtract.findUnique({ where: { id: doc.contractorExtractId } });
           if (!ex || ex.companyId !== c || ex.contractorId !== doc.contractorId) throw badRequest("Extract does not match contractor/company");
           if (ex.status !== "POSTED") throw unprocessable("Extract must be posted before payment");
+          if (isForeign(cur)) throw unprocessable("Extracts are in EGP — pay them in EGP");
           const rem = D(ex.netAmount).minus(D(ex.paidAmount));
           if (amount.greaterThan(rem)) throw unprocessable(`Amount exceeds extract remaining (${rem.toFixed(2)})`);
         }
@@ -163,6 +192,7 @@ async function buildEntry(tx: Tx, docType: DocType, doc: any): Promise<{ lines: 
           const ex = await tx.clientExtract.findUnique({ where: { id: doc.clientExtractId } });
           if (!ex || ex.companyId !== c || ex.clientId !== doc.clientId) throw badRequest("Extract does not match client/company");
           if (ex.status !== "POSTED") throw unprocessable("Client extract must be posted before collection");
+          if (isForeign(cur)) throw unprocessable("Extracts are in EGP — collect them in EGP");
           const rem = D(ex.netAmount).minus(D(ex.paidAmount));
           if (amount.greaterThan(rem)) throw unprocessable(`Amount exceeds extract remaining (${rem.toFixed(2)})`);
         }
@@ -258,8 +288,9 @@ async function buildEntry(tx: Tx, docType: DocType, doc: any): Promise<{ lines: 
     case "TREASURY": {
       const amount = r2(doc.amount);
       if (!amount.greaterThan(0)) throw unprocessable("Amount must be greater than zero");
-      const cash = async (id?: string | null) => moneyAccount(tx, c, "CASH", id, null);
-      const bank = async (id?: string | null) => moneyAccount(tx, c, "BANK", null, id);
+      // every cash box / bank account involved must be in the document currency (transfers are same-currency)
+      const cash = async (id?: string | null) => moneyAccount(tx, c, "CASH", id, null, cur);
+      const bank = async (id?: string | null) => moneyAccount(tx, c, "BANK", null, id, cur);
       const counter = async () => {
         if (!doc.counterAccountId) throw badRequest("Counter account is required");
         const a = await tx.account.findFirst({ where: { id: doc.counterAccountId, companyId: c, isPostable: true } });
@@ -298,7 +329,7 @@ async function buildEntry(tx: Tx, docType: DocType, doc: any): Promise<{ lines: 
         description: `صرف عهدة ${doc.number} - ${doc.purpose}`,
         lines: [
           { accountId: await acc("CUSTODY"), debit: amount, partyType: "EMPLOYEE", partyId: doc.employeeId, projectId: doc.projectId },
-          { accountId: await moneyAccount(tx, c, "CASH", doc.cashBoxId, null), credit: amount },
+          { accountId: await moneyAccount(tx, c, "CASH", doc.cashBoxId, null, "EGP"), credit: amount },
         ],
       };
     }
@@ -343,12 +374,21 @@ export async function postDocument(tx: Tx, ctx: Ctx, docType: DocType, id: strin
       if (e instanceof ExtractError) throw unprocessable(e.message);
       throw e;
     }
+    let lines = built.lines;
+    if (!built.converted && isForeign(doc.currency)) {
+      try {
+        lines = convertLines(built.lines, doc.currency, doc.exchangeRate);
+      } catch (e) {
+        if (e instanceof FxError) throw unprocessable(e.message);
+        throw e;
+      }
+    }
     const je = await createJournalEntry(tx, ctx, {
       companyId: doc.companyId,
       date: built.date,
       description: built.description,
       projectId: built.projectId,
-      lines: built.lines,
+      lines,
       status: "POSTED",
       sourceType: docType,
       sourceId: doc.id,

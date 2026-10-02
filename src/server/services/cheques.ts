@@ -26,6 +26,8 @@ import { audit } from "../audit";
 import type { Ctx } from "../context";
 import { accountIdByKey, createJournalEntry, type LineInput } from "./accounting";
 import { assertPeriodOpen } from "./periods";
+import { assertSameCurrency, resolveDocFx } from "./fx";
+import { isForeign, toBase } from "@/lib/fx";
 
 export type ChequeAction = "collect" | "deposit" | "clear" | "bounce" | "cancel" | "represent";
 
@@ -80,6 +82,8 @@ export async function registerPaymentCheque(tx: Tx, ctx: Ctx | null, pay: any) {
       status: type,
       bankAccountId: pay.bankAccountId ?? null,
       amount: pay.amount,
+      currency: pay.currency ?? "EGP",
+      exchangeRate: pay.exchangeRate ?? 1,
       issueDate: pay.date,
       dueDate: pay.chequeDueDate ?? pay.date,
       partyName: partyName ?? "-",
@@ -108,13 +112,16 @@ export async function createStandaloneCheque(tx: Tx, ctx: Ctx, data: any) {
   if (!data.counterAccountId) throw badRequest("Counter account is required (the account this cheque settles)");
   const counter = await tx.account.findFirst({ where: { id: data.counterAccountId, companyId: data.companyId, isPostable: true, isActive: true } });
   if (!counter) throw badRequest("Counter account is invalid for this company");
-  if (data.type === "ISSUED") await bankGl(tx, data.companyId, data.bankAccountId);
-  else if (data.bankAccountId) await bankGl(tx, data.companyId, data.bankAccountId);
+  await resolveDocFx(tx, data.companyId, data, undefined, "issueDate");
+  if (data.type === "ISSUED" || data.bankAccountId) {
+    const b = await bankGl(tx, data.companyId, data.bankAccountId);
+    assertSameCurrency(`Bank account ${b.bankName} ${b.accountNumber}`, b.currency, data.currency);
+  }
   const amount = r2(data.amount);
   if (!amount.greaterThan(0)) throw unprocessable("Cheque amount must be greater than zero");
   const rate = D(data.exchangeRate ?? 1);
-  const base = r2(amount.mul(rate));
-  const fx = data.currency && data.currency !== "EGP" ? { currency: data.currency, fxAmount: amount, exchangeRate: rate } : {};
+  const base = toBase(amount, rate);
+  const fx = isForeign(data.currency) ? { currency: data.currency, fxAmount: amount, exchangeRate: rate } : {};
   const notes = await accountIdByKey(tx, data.companyId, data.type === "RECEIVED" ? "NOTES_RECEIVABLE" : "NOTES_PAYABLE");
   const party = data.partyType && data.partyId ? { partyType: data.partyType, partyId: data.partyId } : {};
   const lines: LineInput[] =
@@ -188,9 +195,10 @@ export async function chequeTransition(tx: Tx, ctx: Ctx, id: string, action: Che
   if ((action === "collect" || action === "deposit") && input.bankAccountId) bankAccountId = input.bankAccountId;
   const c = ch.companyId;
   const acc = (k: string) => accountIdByKey(tx, c, k);
-  const rate = D((ch as any).exchangeRate ?? 1);
-  const base = r2(D(ch.amount).mul(rate));
-  const fx = (ch as any).currency && (ch as any).currency !== "EGP" ? { currency: (ch as any).currency, fxAmount: r2(ch.amount), exchangeRate: rate } : {};
+  // lifecycle entries use the cheque's original rate (no FX revaluation between receipt and clearing)
+  const rate = D(ch.exchangeRate ?? 1);
+  const base = toBase(ch.amount, rate);
+  const fx = isForeign(ch.currency) ? { currency: ch.currency, fxAmount: r2(ch.amount), exchangeRate: rate } : {};
   const party: Partial<LineInput> = ch.partyType && ch.partyId ? { partyType: ch.partyType, partyId: ch.partyId } : {};
   const counter = async () => {
     if (!ch.counterAccountId) throw unprocessable("Cheque has no counter account");
@@ -199,7 +207,7 @@ export async function chequeTransition(tx: Tx, ctx: Ctx, id: string, action: Che
   let lines: LineInput[] = [];
   const needsBank = ["collect", "deposit"].includes(action) || (action === "clear" && ch.status === "UNDER_COLLECTION") || (ch.type === "ISSUED" && action === "clear") || (action === "bounce" && ch.status === "DEPOSITED") || charges.greaterThan(0);
   const bank = needsBank ? await bankGl(tx, c, bankAccountId) : null;
-  if (bank && (bank.currency ?? "EGP") !== ((ch as any).currency ?? "EGP")) throw unprocessable(`Bank account currency (${bank.currency}) differs from cheque currency (${(ch as any).currency})`);
+  if (bank) assertSameCurrency(`Bank account ${bank.bankName} ${bank.accountNumber}`, bank.currency, ch.currency);
 
   if (ch.ledger) {
     const R = ch.type === "RECEIVED";
@@ -242,7 +250,10 @@ export async function chequeTransition(tx: Tx, ctx: Ctx, id: string, action: Che
         throw unprocessable("Unsupported cheque transition");
     }
     if (charges.greaterThan(0)) {
-      lines.push({ accountId: await acc("BANK_CHARGES"), debit: charges, description: "مصاريف بنكية" }, { accountId: bank!.accountId, credit: charges, description: "مصاريف بنكية" });
+      // charges are in the bank account's (= cheque's) currency
+      const chBase = toBase(charges, rate);
+      const chFx = isForeign(ch.currency) ? { currency: ch.currency, fxAmount: charges, exchangeRate: rate } : {};
+      lines.push({ accountId: await acc("BANK_CHARGES"), debit: chBase, description: "مصاريف بنكية", ...chFx }, { accountId: bank!.accountId, credit: chBase, description: "مصاريف بنكية", ...chFx });
     }
     void R;
   } else {
