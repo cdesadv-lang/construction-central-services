@@ -290,6 +290,8 @@ model Company {
   approvalRequests   ApprovalRequest[]
   workflows          ApprovalWorkflow[]
   budgets            ProjectBudget[]
+  fiscalYears        FiscalYear[]
+  periods            AccountingPeriod[]
 }
 
 model Client {
@@ -1279,4 +1281,58 @@ model LoginThrottle {
   windowStart DateTime  @default(now())
   lockedUntil DateTime?
   updatedAt   DateTime  @updatedAt
+}
+
+enum PeriodStatus {
+  OPEN
+  CLOSED
+}
+
+/// Fiscal year of a company (12 monthly periods, may start in any month).
+model FiscalYear {
+  id           String             @id @default(cuid())
+  companyId    String
+  company      Company            @relation(fields: [companyId], references: [id])
+  name         String
+  startDate    DateTime
+  endDate      DateTime
+  status       PeriodStatus       @default(OPEN)
+  closedAt     DateTime?
+  closedById   String?
+  reopenedAt   DateTime?
+  reopenedById String?
+  reopenReason String?
+  notes        String?
+  createdAt    DateTime           @default(now())
+  periods      AccountingPeriod[]
+
+  @@unique([companyId, name])
+  @@index([companyId, startDate])
+}
+
+/// Monthly accounting period. Posting/editing anything dated inside a CLOSED period is rejected.
+model AccountingPeriod {
+  id           String       @id @default(cuid())
+  companyId    String
+  company      Company      @relation(fields: [companyId], references: [id])
+  fiscalYearId String
+  fiscalYear   FiscalYear   @relation(fields: [fiscalYearId], references: [id], onDelete: Cascade)
+  year         Int
+  month        Int
+  startDate    DateTime
+  endDate      DateTime
+  status       PeriodStatus @default(OPEN)
+  /// manual checklist items: { [key]: { done: boolean, by: userId, at: iso } }
+  checklist    Json         @default("{}")
+  closedAt     DateTime?
+  closedById   String?
+  reopenedAt   DateTime?
+  reopenedById String?
+  reopenReason String?
+  notes        String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@unique([companyId, year, month])
+  @@index([fiscalYearId])
 }

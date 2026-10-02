@@ -5,8 +5,7 @@ import { useEffect, useState } from "react";
 import {
   LayoutDashboard, Building2, FolderKanban, Calculator, BookOpenText, ListTree, Truck, HardHat, FileSpreadsheet, FileSignature,
   Receipt, Wallet, Landmark, ShoppingCart, PieChart, Users, Banknote, BarChart3, FileText, Bell, Settings, ShieldCheck, CheckSquare,
-  LogOut, Languages, Menu, Building,
-} from "lucide-react";
+  LogOut, Languages, Menu, Building, CalendarCheck } from "lucide-react";
 import clsx from "clsx";
 import { useApp } from "./app-provider";
 import { api } from "@/lib/client/api";
@@ -29,6 +28,7 @@ const GROUPS: { key: string; items: Item[] }[] = [
       { href: "/accounting", key: "accounting", icon: Calculator, modules: ["accounting"] },
       { href: "/journal-entries", key: "journalEntries", icon: BookOpenText, modules: ["journals"] },
       { href: "/accounts", key: "accounts", icon: ListTree, modules: ["accounting"] },
+      { href: "/periods", key: "periods", icon: CalendarCheck, modules: ["periods"] },
       { href: "/suppliers", key: "suppliers", icon: Truck, modules: ["suppliers"] },
       { href: "/contractors", key: "contractors", icon: HardHat, modules: ["contractors"] },
       { href: "/client-extracts", key: "clientExtracts", icon: FileSpreadsheet, modules: ["clientExtracts"] },

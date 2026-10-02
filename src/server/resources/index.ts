@@ -3,9 +3,10 @@ import { coreResources } from "./core";
 import { partyResources } from "./parties";
 import { treasuryResources } from "./treasury";
 import { opsResources } from "./ops";
+import { periodResources } from "./periods";
 import type { ResourceDef } from "./engine";
 
-export const RESOURCES: Record<string, ResourceDef> = { ...coreResources, ...partyResources, ...treasuryResources, ...opsResources };
+export const RESOURCES: Record<string, ResourceDef> = { ...coreResources, ...partyResources, ...treasuryResources, ...opsResources, ...periodResources };
 
 export function getDef(name: string) {
   const def = RESOURCES[name];

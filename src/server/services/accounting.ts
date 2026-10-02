@@ -6,6 +6,7 @@ import { badRequest, notFound, unprocessable } from "@/lib/errors";
 import { nextNumber } from "../sequence";
 import { audit } from "../audit";
 import type { Ctx } from "../context";
+import { assertPeriodOpen } from "./periods";
 
 interface TplAccount {
   code: string;
@@ -186,6 +187,7 @@ function lineData(companyId: string, entryProjectId: string | null | undefined, 
 }
 
 export async function createJournalEntry(tx: Tx, ctx: Ctx | null, input: EntryInput) {
+  await assertPeriodOpen(tx, input.companyId, input.date, "Journal entries");
   if (input.projectId) {
     const p = await tx.project.findFirst({ where: { id: input.projectId, companyId: input.companyId } });
     if (!p) throw badRequest("Project does not belong to this company");
@@ -223,6 +225,8 @@ export async function updateDraftJournalEntry(tx: Tx, ctx: Ctx, id: string, inpu
   if (!existing) throw notFound();
   if (existing.status !== "DRAFT") throw unprocessable("Only draft entries can be edited");
   if (existing.sourceType) throw unprocessable("System-generated entries cannot be edited");
+  await assertPeriodOpen(tx, existing.companyId, existing.date, "Journal entries");
+  await assertPeriodOpen(tx, existing.companyId, input.date, "Journal entries");
   const totals = await validateLines(tx, existing.companyId, input.lines);
   const entry = await tx.journalEntry.update({
     where: { id },
@@ -245,6 +249,7 @@ export async function postJournalEntry(tx: Tx, ctx: Ctx, id: string) {
   const e = await tx.journalEntry.findUnique({ where: { id }, include: { lines: true } });
   if (!e) throw notFound();
   if (e.status !== "APPROVED") throw unprocessable(`Only approved entries can be posted (current status: ${e.status})`);
+  await assertPeriodOpen(tx, e.companyId, e.date, "Journal entries");
   await validateLines(tx, e.companyId, e.lines);
   const res = await tx.journalEntry.updateMany({
     where: { id, status: "APPROVED" },

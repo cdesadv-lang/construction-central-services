@@ -6,6 +6,7 @@ import { badRequest, unprocessable } from "@/lib/errors";
 import { nextNumber } from "../sequence";
 import { audit } from "../audit";
 import { buildPayrollLines } from "../services/payroll";
+import { monthEnd } from "../services/posting";
 import type { ResourceDef } from "./engine";
 import { optDate, optId, optStr, money, pct, reqDate, reqId, reqStr, optMoney, optInt, month } from "./z";
 
@@ -342,6 +343,7 @@ export const opsResources: Record<string, ResourceDef> = {
     projectField: "projectId",
     refs: { projectId: "project" },
     numbering: { key: "PRL", prefix: "PRL" },
+    periodDate: (r) => (r?.month ? monthEnd(r.month) : null),
     listInclude: { project: { select: { code: true, name: true } }, _count: { select: { lines: true } } },
     include: { project: { select: { code: true, name: true } }, lines: { orderBy: { employeeName: "asc" } } },
     orderBy: [{ month: "desc" }],

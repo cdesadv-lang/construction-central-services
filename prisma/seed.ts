@@ -584,8 +584,25 @@ async function main() {
   const p1 = await prisma.project.findFirstOrThrow({ where: { code: "NIL-P01" } });
   await prisma.userProject.create({ data: { userId: created["site.nile@ccs.local"].id, projectId: p1.id } });
 
+  // Fiscal years 2025 & 2026 for every company; months through June 2026 are closed via the real checklist/close service.
+  const MANUAL = ["accruals", "depreciation", "inventory", "review"];
+  for (const co of await prisma.company.findMany({ orderBy: { code: "asc" } })) {
+    for (const year of [2025, 2026]) await create(admin, "fiscal-years", { companyId: co.id, year });
+    const periods = await prisma.accountingPeriod.findMany({ where: { companyId: co.id, startDate: { lt: new Date(Date.UTC(2026, 6, 1)) } }, orderBy: { startDate: "asc" } });
+    for (const p of periods) {
+      for (const key of MANUAL) await act(ctxByRole.CHIEF_ACCOUNTANT!, "accounting-periods", p.id, "checklist", { key, done: true });
+      try {
+        await act(ctxByRole.FINANCE_MANAGER!, "accounting-periods", p.id, "close", { notes: "إقفال شهري (بيانات تجريبية)" });
+      } catch (e) {
+        console.warn(`  ! ${co.code} ${p.year}-${p.month} not closed: ${(e as Error).message}`);
+        break;
+      }
+    }
+  }
+
   const counts = {
     companies: await prisma.company.count(),
+    closedPeriods: await prisma.accountingPeriod.count({ where: { status: "CLOSED" } }),
     projects: await prisma.project.count(),
     journalEntries: await prisma.journalEntry.count(),
     postedEntries: await prisma.journalEntry.count({ where: { status: "POSTED" } }),

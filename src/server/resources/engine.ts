@@ -11,6 +11,7 @@ import { nextNumber } from "../sequence";
 import { actOnRequest, approvalHistory, cancelDocument, pendingRequestFor, submitForApproval } from "../services/approval";
 import { postDocument, reverseDocument } from "../services/posting";
 import type { DocType } from "../services/doctypes";
+import { assertPeriodOpen } from "../services/periods";
 
 export interface ResourceDef {
   model: string;
@@ -46,6 +47,15 @@ export interface ResourceDef {
   detail?: (tx: Tx, row: any, ctx: Ctx) => Promise<Record<string, unknown>>;
   actions?: Record<string, { perm: ActionKey; run: (tx: Tx, ctx: Ctx, existing: any, body: any) => Promise<any> }>;
   csv?: { key: string; label: string }[];
+  /** accounting date used for period locking (default for ledger documents: row[dateField]) */
+  periodDate?: (row: any) => Date | string | null | undefined;
+}
+
+/** Ledger-affecting documents are locked by accounting period (purchase orders are commitments, not ledger documents). */
+function lockDate(def: ResourceDef, row: any) {
+  if (def.periodDate) return def.periodDate(row);
+  if (!def.docType || def.docType === "PURCHASE_ORDER") return null;
+  return row?.[def.dateField ?? "date"];
 }
 
 const d = (tx: Tx | typeof prisma, model: string) => (tx as any)[model];
@@ -163,6 +173,7 @@ export async function createResource(def: ResourceDef, ctx: Ctx, body: any) {
   }
   return prisma.$transaction(
     async (tx) => {
+      await assertPeriodOpen(tx, companyId, lockDate(def, data), "Documents");
       await validateRefs(tx, def, companyId, data, ctx);
       if (def.numbering) {
         const f = def.numbering.field ?? "number";
@@ -202,6 +213,8 @@ export async function updateResource(def: ResourceDef, ctx: Ctx, id: string, bod
   if (def.projectField && def.projectField !== "id" && data[def.projectField] !== undefined && ctx.projectIds) assertProject(ctx, data[def.projectField]);
   return prisma.$transaction(
     async (tx) => {
+      await assertPeriodOpen(tx, existing.companyId, lockDate(def, existing), "Documents");
+      await assertPeriodOpen(tx, existing.companyId, lockDate(def, { ...existing, ...data }), "Documents");
       await validateRefs(tx, def, existing.companyId, data, ctx);
       let row;
       if (def.customUpdate) row = await def.customUpdate(tx, ctx, existing, data);
@@ -222,6 +235,7 @@ export async function deleteResource(def: ResourceDef, ctx: Ctx, id: string) {
   const existing = await loadScoped(def, ctx, id);
   assertEditable(def, existing);
   return prisma.$transaction(async (tx) => {
+    await assertPeriodOpen(tx, existing.companyId, lockDate(def, existing), "Documents");
     if (def.canDelete) {
       const reason = await def.canDelete(tx, existing);
       if (reason) throw unprocessable(reason);
@@ -240,12 +254,18 @@ export async function actionResource(def: ResourceDef, ctx: Ctx, id: string, act
     const dt = def.docType;
     switch (action) {
       case "submit":
-        return run((tx) => submitForApproval(tx, ctx, dt, id));
+        return run(async (tx) => {
+          await assertPeriodOpen(tx, existing.companyId, lockDate(def, existing), "Documents");
+          return submitForApproval(tx, ctx, dt, id);
+        });
       case "approve":
       case "reject": {
         const reqRow = await pendingRequestFor(prisma, dt, id);
         if (!reqRow) throw unprocessable("No pending approval request for this document");
-        return run((tx) => actOnRequest(tx, ctx, reqRow.id, action === "approve" ? "APPROVE" : "REJECT", body?.comment));
+        return run(async (tx) => {
+          if (action === "approve") await assertPeriodOpen(tx, existing.companyId, lockDate(def, existing), "Documents");
+          return actOnRequest(tx, ctx, reqRow.id, action === "approve" ? "APPROVE" : "REJECT", body?.comment);
+        });
       }
       case "post":
         requirePerm(ctx, def.module, "approve");

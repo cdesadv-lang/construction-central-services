@@ -15,6 +15,7 @@ const P: Record<string, Record<string, [string, string]>> = {
     accounting: ["المحاسبة", "Accounting"],
     journalEntries: ["القيود اليومية", "Journal Entries"],
     accounts: ["دليل الحسابات", "Chart of Accounts"],
+    periods: ["الفترات والإقفال", "Periods & closing"],
     suppliers: ["الموردون", "Suppliers"],
     contractors: ["مقاولو الباطن", "Contractors"],
     clientExtracts: ["مستخلصات العملاء", "Client Extracts"],
@@ -274,7 +275,7 @@ const P: Record<string, Record<string, [string, string]>> = {
     suppliers: ["الموردون", "Suppliers"], contractors: ["المقاولون", "Contractors"], clientExtracts: ["مستخلصات العملاء", "Client extracts"], contractorExtracts: ["مستخلصات المقاولين", "Contractor extracts"],
     expenses: ["المصروفات", "Expenses"], custody: ["العهد", "Custody"], payments: ["المدفوعات", "Payments"], treasury: ["الخزينة", "Treasury"], banks: ["البنوك", "Banks"], procurement: ["المشتريات", "Procurement"],
     costing: ["التكاليف", "Costing"], hr: ["الموارد البشرية", "HR"], payroll: ["الرواتب", "Payroll"], reports: ["التقارير", "Reports"], documents: ["المستندات", "Documents"], notifications: ["الإشعارات", "Notifications"],
-    settings: ["الإعدادات", "Settings"], audit: ["سجل التدقيق", "Audit"],
+    settings: ["الإعدادات", "Settings"], audit: ["سجل التدقيق", "Audit"], periods: ["الفترات المحاسبية", "Accounting periods"],
   },
   t: {
     projects: ["المشروعات", "Projects"], clients: ["العملاء", "Clients"], budgets: ["موازنات المشروعات", "Project budgets"], suppliers: ["الموردون", "Suppliers"], invoices: ["فواتير الموردين", "Supplier invoices"],
@@ -287,7 +288,28 @@ const P: Record<string, Record<string, [string, string]>> = {
     tree: ["شجرة الحسابات", "Account tree"], ledger: ["دفتر الأستاذ", "Ledger"], statement: ["كشف الحساب", "Statement"], aging: ["أعمار الديون", "Aging"], overview: ["نظرة عامة", "Overview"],
     users: ["المستخدمون", "Users"], permissions: ["الصلاحيات", "Permissions"], workflows: ["مسارات الاعتماد", "Workflows"],
   },
-};
+  x: {
+    // periods
+    fiscalYears: ["السنوات المالية", "Fiscal years"], newFiscalYear: ["سنة مالية جديدة", "New fiscal year"], year: ["السنة", "Year"], startMonth: ["شهر البداية", "Start month"],
+    period: ["الفترة", "Period"], checklist: ["قائمة مراجعة الإقفال الشهري", "Month-end close checklist"], closePeriod: ["إقفال الفترة", "Close period"], reopenPeriod: ["إعادة فتح الفترة", "Reopen period"],
+    closeYear: ["إقفال السنة", "Close year"], reopenYear: ["إعادة فتح السنة", "Reopen year"], reason: ["السبب", "Reason"], reasonPrompt: ["سبب إعادة الفتح (إلزامي)", "Reason for reopening (required)"],
+    closedBy: ["أقفلت في", "Closed at"], reopened: ["أعيد فتحها", "Reopened"], blocking: ["إلزامي", "Required"], warning: ["تنبيه", "Warning"], auto: ["آلي", "Automatic"], manual: ["يدوي", "Manual"],
+    canClose: ["جاهزة للإقفال", "Ready to close"], cannotClose: ["توجد بنود غير مستوفاة", "Open items remain"], selectCompany: ["اختر شركة من الأعلى لعرض فتراتها", "Select a company at the top to see its periods"],
+    markDone: ["تم", "Done"], undo: ["تراجع", "Undo"], periodsHint: ["لا يمكن إنشاء أو تعديل أو ترحيل أي قيد أو مستند بتاريخ داخل فترة مقفلة.", "Nothing dated inside a closed period can be created, edited or posted."],
+    // cheques
+    chequeLifecycle: ["دورة حياة الشيك", "Cheque lifecycle"], movements: ["الحركات", "Movements"], deposit: ["إيداع بالحساب", "Deposit"], collect: ["إرسال للتحصيل", "Send for collection"],
+    clear: ["تحصيل / صرف", "Clear"], bounce: ["ارتداد", "Bounce"], cancelCheque: ["إلغاء الشيك", "Cancel cheque"], represent: ["إعادة تقديم", "Re-present"], bankCharges: ["مصاريف بنكية", "Bank charges"],
+    drawerBank: ["بنك الساحب", "Drawer bank"], toStatus: ["إلى الحالة", "To status"], fromStatus: ["من الحالة", "From status"],
+    // payroll rules
+    payrollRules: ["قواعد الرواتب", "Payroll rules"], insurance: ["التأمينات الاجتماعية", "Social insurance"], employeeInsPct: ["حصة العامل %", "Employee share %"], companyInsPct: ["حصة صاحب العمل %", "Employer share %"],
+    insMin: ["الحد الأدنى لأجر الاشتراك (شهري)", "Minimum insurable wage (monthly)"], insMax: ["الحد الأقصى لأجر الاشتراك (شهري)", "Maximum insurable wage (monthly)"],
+    exemption: ["الإعفاء الشخصي السنوي", "Annual personal exemption"], brackets: ["شرائح ضريبة كسب العمل (سنوية)", "Salary tax brackets (annual)"], upTo: ["حتى", "Up to"], rate: ["السعر %", "Rate %"],
+    schedule: ["جدول", "Schedule"], incomeUpTo: ["لصافي دخل سنوي حتى", "For annual net income up to"], unlimited: ["بلا حد", "No limit"], addBracket: ["إضافة شريحة", "Add bracket"], addSchedule: ["إضافة جدول", "Add schedule"],
+    source: ["المصدر", "Source"], effectiveFrom: ["سارية من", "Effective from"], resetDefaults: ["استعادة القيم القانونية", "Reset to statutory defaults"], deductPenaltiesFromTaxable: ["خصم الجزاءات من الوعاء الضريبي", "Deduct penalties from taxable income"],
+    // fx
+    currency: ["العملة", "Currency"], exchangeRate: ["سعر الصرف", "Exchange rate"], exchangeRates: ["أسعار الصرف", "Exchange rates"], baseCurrency: ["العملة الأساسية", "Base currency"],
+    fxAmount: ["المبلغ بالعملة", "Amount (currency)"], baseAmount: ["المعادل بالجنيه", "Base amount (EGP)"], fxBalance: ["الرصيد بالعملة", "Balance (currency)"],
+  },};
 
 function build(i: 0 | 1): Dict {
   const out: Dict = {};
