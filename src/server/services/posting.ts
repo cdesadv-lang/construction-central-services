@@ -15,6 +15,7 @@ import {
   type LineInput,
 } from "./accounting";
 import { DOC_TYPES, type DocType } from "./doctypes";
+import { cancelPaymentCheque, registerPaymentCheque } from "./cheques";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const delegate = (tx: Tx, docType: DocType) => (tx as any)[DOC_TYPES[docType].model];
@@ -104,7 +105,19 @@ async function buildEntry(tx: Tx, docType: DocType, doc: any): Promise<{ lines: 
     case "PAYMENT": {
       const amount = r2(doc.amount);
       if (!amount.greaterThan(0)) throw unprocessable("Payment amount must be greater than zero");
-      const money = await moneyAccount(tx, c, doc.method, doc.cashBoxId, doc.bankAccountId);
+      // Cheques don't touch the bank at payment time: received cheques go to Notes Receivable (cheques in hand),
+      // issued cheques to Notes Payable. The bank moves when the cheque is deposited / cleared (see services/cheques.ts).
+      const money =
+        doc.method === "CHEQUE"
+          ? await acc(doc.type === "CLIENT_RECEIPT" ? "NOTES_RECEIVABLE" : "NOTES_PAYABLE")
+          : await moneyAccount(tx, c, doc.method, doc.cashBoxId, doc.bankAccountId);
+      if (doc.method === "CHEQUE") {
+        if (!doc.chequeNumber) throw badRequest("Cheque number is required");
+        if (doc.type !== "CLIENT_RECEIPT") {
+          if (!doc.bankAccountId) throw badRequest("Bank account (drawn on) is required for issued cheques");
+          await moneyAccount(tx, c, "BANK", null, doc.bankAccountId); // validates company
+        }
+      }
       if (doc.type === "SUPPLIER_PAYMENT") {
         if (!doc.supplierId) throw badRequest("Supplier is required");
         if (doc.supplierInvoiceId) {
@@ -305,27 +318,8 @@ async function applySideEffects(tx: Tx, docType: DocType, doc: any, sign: 1 | -1
     if (doc.supplierInvoiceId) await tx.supplierInvoice.update({ where: { id: doc.supplierInvoiceId }, data: { paidAmount: { increment: amt } } });
     if (doc.contractorExtractId) await tx.contractorExtract.update({ where: { id: doc.contractorExtractId }, data: { paidAmount: { increment: amt } } });
     if (doc.clientExtractId) await tx.clientExtract.update({ where: { id: doc.clientExtractId }, data: { paidAmount: { increment: amt } } });
-    if (doc.method === "CHEQUE" && sign === 1 && doc.bankAccountId) {
-      const partyName = doc.supplierId
-        ? (await tx.supplier.findUnique({ where: { id: doc.supplierId } }))?.name
-        : doc.contractorId
-          ? (await tx.contractor.findUnique({ where: { id: doc.contractorId } }))?.name
-          : (await tx.client.findUnique({ where: { id: doc.clientId } }))?.name;
-      await tx.cheque.create({
-        data: {
-          companyId: doc.companyId,
-          number: doc.chequeNumber || doc.number,
-          type: doc.type === "CLIENT_RECEIPT" ? "RECEIVED" : "ISSUED",
-          bankAccountId: doc.bankAccountId,
-          amount: doc.amount,
-          issueDate: doc.date,
-          dueDate: doc.chequeDueDate ?? doc.date,
-          partyName: partyName ?? "-",
-          paymentId: doc.id,
-        },
-      });
-    }
-    if (doc.method === "CHEQUE" && sign === -1) await tx.cheque.updateMany({ where: { paymentId: doc.id }, data: { status: "CANCELLED" } });
+    if (doc.method === "CHEQUE" && sign === 1) await registerPaymentCheque(tx, ctx, doc);
+    if (doc.method === "CHEQUE" && sign === -1) await cancelPaymentCheque(tx, ctx, doc);
   }
   if (docType === "PURCHASE_ORDER" && sign === 1 && doc.requestId) {
     await tx.purchaseRequest.update({ where: { id: doc.requestId }, data: { status: "ORDERED" } });
@@ -393,6 +387,10 @@ export async function reverseDocument(tx: Tx, ctx: Ctx, docType: DocType, id: st
   if (docType === "CLIENT_EXTRACT") {
     const later = await tx.clientExtract.count({ where: { projectId: doc.projectId, status: "POSTED", date: { gt: doc.date }, id: { not: id } } });
     if (later) throw unprocessable("Later extracts exist for this project — reverse them first");
+  }
+  if (docType === "PAYMENT" && doc.method === "CHEQUE") {
+    const ch = await tx.cheque.findFirst({ where: { paymentId: id, status: { notIn: ["RECEIVED", "ISSUED", "CANCELLED"] } } });
+    if (ch) throw unprocessable(`Cheque ${ch.number} has already moved (${ch.status}) — use the cheque lifecycle (bounce/cancel) instead of reversing the payment`);
   }
   if (docType === "CUSTODY") {
     const used = await tx.expense.count({ where: { custodyId: id, status: { in: ["POSTED", "APPROVED", "PENDING_APPROVAL"] } } });

@@ -115,7 +115,10 @@ enum ChequeType {
 }
 
 enum ChequeStatus {
-  PENDING
+  RECEIVED
+  ISSUED
+  UNDER_COLLECTION
+  DEPOSITED
   CLEARED
   BOUNCED
   CANCELLED
@@ -398,6 +401,7 @@ model Account {
   lines       JournalLine[]
   cashBox     CashBox?
   bankAccount BankAccount?
+  cheques     Cheque[]
 
   @@unique([companyId, code])
   @@unique([companyId, systemKey])
@@ -821,24 +825,56 @@ model TreasuryTransaction {
 }
 
 model Cheque {
-  id            String       @id @default(cuid())
-  companyId     String
-  company       Company      @relation(fields: [companyId], references: [id])
-  number        String
-  type          ChequeType
-  bankAccountId String
-  bankAccount   BankAccount  @relation(fields: [bankAccountId], references: [id])
-  amount        Decimal      @db.Decimal(18, 2)
-  issueDate     DateTime
-  dueDate       DateTime
-  partyName     String
-  paymentId     String?
-  status        ChequeStatus @default(PENDING)
-  notes         String?
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
+  id               String           @id @default(cuid())
+  companyId        String
+  company          Company          @relation(fields: [companyId], references: [id])
+  number           String
+  type             ChequeType
+  /// issued: the account the cheque is drawn on; received: the bank it was deposited/sent for collection to
+  bankAccountId    String?
+  bankAccount      BankAccount?     @relation(fields: [bankAccountId], references: [id])
+  drawerBank       String?
+  amount           Decimal          @db.Decimal(18, 2)
+  issueDate        DateTime
+  dueDate          DateTime
+  partyName        String
+  partyType        String?
+  partyId          String?
+  /// account the cheque settles (AR / AP / advances / any account for stand-alone cheques)
+  counterAccountId String?
+  counterAccount   Account?         @relation(fields: [counterAccountId], references: [id])
+  paymentId        String?
+  status           ChequeStatus
+  /// false = register-only cheque (legacy rows created before the lifecycle existed): status changes post no entries
+  ledger           Boolean          @default(true)
+  journalEntryId   String?
+  notes            String?
+  createdById      String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  movements        ChequeMovement[]
 
-  @@unique([companyId, bankAccountId, number])
+  @@unique([companyId, type, number, bankAccountId])
+  @@index([companyId, status])
+  @@index([paymentId])
+}
+
+model ChequeMovement {
+  id             String        @id @default(cuid())
+  chequeId       String
+  cheque         Cheque        @relation(fields: [chequeId], references: [id], onDelete: Cascade)
+  companyId      String
+  fromStatus     ChequeStatus?
+  toStatus       ChequeStatus
+  date           DateTime
+  bankAccountId  String?
+  charges        Decimal       @default(0) @db.Decimal(18, 2)
+  journalEntryId String?
+  notes          String?
+  createdById    String?
+  createdAt      DateTime      @default(now())
+
+  @@index([chequeId])
 }
 
 model BankReconciliation {

@@ -5,6 +5,7 @@ import { D } from "@/lib/money";
 import { badRequest, unprocessable } from "@/lib/errors";
 import { createChildAccount } from "../services/accounting";
 import { settleCustody } from "../services/posting";
+import { allowedActions, chequeTransition, createStandaloneCheque, type ChequeAction } from "../services/cheques";
 import type { ResourceDef } from "./engine";
 import { optDate, optId, optStr, money, reqDate, reqId, reqStr } from "./z";
 
@@ -20,7 +21,8 @@ function checkMethod(data: any, partial = false) {
   const m = data.paymentMethod ?? data.method;
   if (!m) return;
   if (m === "CASH" && !data.cashBoxId && !partial) throw badRequest("Cash box is required for cash payments");
-  if ((m === "BANK" || m === "CHEQUE") && !data.bankAccountId && !partial) throw badRequest("Bank account is required");
+  // received cheques (client receipts) are deposited later, so the bank is optional for them
+  if ((m === "BANK" || (m === "CHEQUE" && data.type !== "CLIENT_RECEIPT")) && !data.bankAccountId && !partial) throw badRequest("Bank account is required");
   if (m === "CUSTODY" && !data.custodyId && !partial) throw badRequest("Custody is required");
   if (m === "CREDIT" && !data.supplierId && !partial) throw badRequest("Supplier is required for credit purchases");
 }
@@ -287,15 +289,48 @@ export const treasuryResources: Record<string, ResourceDef> = {
   cheques: {
     model: "cheque",
     module: "banks",
-    create: z.object({ number: reqStr, type: z.enum(["ISSUED", "RECEIVED"]), bankAccountId: reqId, amount: money, issueDate: reqDate, dueDate: reqDate, partyName: reqStr, notes: optStr }),
-    update: z.object({ status: z.enum(["PENDING", "CLEARED", "BOUNCED", "CANCELLED"]), dueDate: reqDate, notes: optStr }).partial(),
-    search: ["number", "partyName"],
-    filters: ["status", "type", "bankAccountId"],
+    entity: "cheque",
+    create: z.object({
+      number: reqStr,
+      type: z.enum(["ISSUED", "RECEIVED"]),
+      bankAccountId: optId,
+      drawerBank: optStr,
+      amount: money,
+      issueDate: reqDate,
+      dueDate: reqDate,
+      partyName: reqStr,
+      partyType: z.preprocess((v) => (v === "" ? null : v), z.enum(["CLIENT", "SUPPLIER", "CONTRACTOR", "EMPLOYEE", "OTHER"]).nullable().optional()),
+      partyId: optId,
+      counterAccountId: reqId,
+      notes: optStr,
+    }),
+    update: z.object({ dueDate: reqDate, drawerBank: optStr, notes: optStr }).partial(),
+    search: ["number", "partyName", "drawerBank"],
+    filters: ["status", "type", "bankAccountId", "partyId"],
     dateField: "dueDate",
-    refs: { bankAccountId: "bankAccount" },
-    include: { bankAccount: { select: { bankName: true, accountNumber: true } } },
+    refs: { bankAccountId: "bankAccount", counterAccountId: "account" },
+    include: {
+      bankAccount: { select: { bankName: true, accountNumber: true, currency: true } },
+      counterAccount: { select: { code: true, name: true } },
+      movements: { orderBy: { createdAt: "asc" } },
+    },
+    listInclude: { bankAccount: { select: { bankName: true, accountNumber: true } }, counterAccount: { select: { code: true, name: true } } },
     orderBy: [{ dueDate: "asc" }],
-    canDelete: async (_tx, row) => (row.paymentId ? "Cheque is linked to a payment — reverse the payment instead" : null),
+    customCreate: (tx, ctx, data) => createStandaloneCheque(tx, ctx, data),
+    // date changes don't affect the ledger; the lifecycle (actions) does
+    decorate: async (rows) => rows.map((r) => ({ ...r, allowedActions: allowedActions(r.type, r.status) })),
+    detail: async (tx, row) => {
+      const jeIds = (row.movements ?? []).map((m: any) => m.journalEntryId).filter(Boolean);
+      const entries = await tx.journalEntry.findMany({ where: { id: { in: jeIds } }, select: { id: true, number: true } });
+      return { entryNumbers: Object.fromEntries(entries.map((e) => [e.id, e.number])) };
+    },
+    canDelete: async (_tx, row) => (row.ledger ? "Cheques with accounting entries cannot be deleted — cancel them instead" : row.paymentId ? "Cheque is linked to a payment — reverse the payment instead" : null),
+    actions: Object.fromEntries(
+      (["collect", "deposit", "clear", "bounce", "cancel", "represent"] as ChequeAction[]).map((a) => [
+        a,
+        { perm: "approve" as const, run: (tx: any, ctx: any, e: any, body: any) => chequeTransition(tx, ctx, e.id, a, body) },
+      ]),
+    ),
   },
   "bank-reconciliations": {
     model: "bankReconciliation",

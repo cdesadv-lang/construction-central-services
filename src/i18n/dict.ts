@@ -254,7 +254,7 @@ const P: Record<string, Record<string, [string, string]>> = {
     SUPPLIER_PAYMENT: ["سداد مورد", "Supplier payment"], CONTRACTOR_PAYMENT: ["سداد مقاول", "Contractor payment"], CONTRACTOR_ADVANCE: ["دفعة مقدمة لمقاول", "Contractor advance"], CLIENT_RECEIPT: ["تحصيل من عميل", "Client receipt"],
     CASH_RECEIPT: ["سند قبض نقدي", "Cash receipt"], CASH_PAYMENT: ["سند صرف نقدي", "Cash payment"], CASH_TRANSFER: ["تحويل بين الخزائن", "Cash transfer"], BANK_DEPOSIT: ["إيداع بالبنك", "Bank deposit"],
     BANK_WITHDRAWAL: ["سحب من البنك", "Bank withdrawal"], BANK_TRANSFER: ["تحويل بين البنوك", "Bank transfer"], BANK_RECEIPT: ["إشعار إضافة بنكي", "Bank receipt"], BANK_PAYMENT: ["إشعار خصم بنكي", "Bank payment"],
-    ISSUED: ["صادر", "Issued"], RECEIVED: ["وارد", "Received"], PENDING: ["قيد الانتظار", "Pending"], CLEARED: ["محصل/مصروف", "Cleared"], BOUNCED: ["مرتد", "Bounced"],
+    ISSUED: ["صادر", "Issued"], RECEIVED: ["وارد (بالحافظة)", "Received (in hand)"], UNDER_COLLECTION: ["تحت التحصيل", "Under collection"], DEPOSITED: ["مودع بالحساب", "Deposited"], PENDING: ["قيد الانتظار", "Pending"], CLEARED: ["محصل/مصروف", "Cleared"], BOUNCED: ["مرتد", "Bounced"],
     OPEN: ["مفتوحة", "Open"], SETTLED: ["مسواة", "Settled"], REJECTED: ["مرفوض", "Rejected"],
     ON_LEAVE: ["في إجازة", "On leave"], TERMINATED: ["منتهي الخدمة", "Terminated"], PRESENT: ["حاضر", "Present"], ABSENT: ["غائب", "Absent"], LATE: ["متأخر", "Late"], LEAVE: ["إجازة", "Leave"],
     ANNUAL: ["سنوية", "Annual"], SICK: ["مرضية", "Sick"], UNPAID: ["بدون أجر", "Unpaid"], EMERGENCY: ["عارضة", "Emergency"], OVERTIME: ["إضافي", "Overtime"], BONUS: ["مكافأة", "Bonus"], DEDUCTION: ["خصم/جزاء", "Deduction"],

@@ -27,3 +27,24 @@ export async function expectApiError(p: Promise<unknown>, status: number) {
   }
   throw new Error(`Expected ApiError ${status} but call succeeded`);
 }
+
+const ROLE_EMAIL: Record<string, string> = { CHIEF_ACCOUNTANT: "chief@ccs.local", FINANCE_MANAGER: "cfo@ccs.local", GENERAL_MANAGER: "gm@ccs.local" };
+
+/** submit → approve every workflow step with the matching role → post (as CFO). */
+export async function submitApprovePost(submitter: Ctx, res: string, id: string) {
+  await act(submitter, res, id, "submit");
+  const docType = RESOURCES[res].docType!;
+  for (let i = 0; i < 10; i++) {
+    const r = await prisma.approvalRequest.findFirst({ where: { docType, docId: id, status: "PENDING" } });
+    if (!r) break;
+    const step = (r.steps as any[])[r.currentStep - 1];
+    await act(await ctxFor(ROLE_EMAIL[step.role]), res, id, "approve", { comment: "ok" });
+  }
+  return act(await ctxFor("cfo@ccs.local"), res, id, "post");
+}
+
+/** posted ledger balance (debit - credit) of an account, optionally for one party */
+export async function ledgerBalance(accountId: string, partyId?: string) {
+  const a = await prisma.journalLine.aggregate({ where: { accountId, ...(partyId ? { partyId } : {}), entry: { status: "POSTED" } }, _sum: { debit: true, credit: true } });
+  return Number(a._sum.debit ?? 0) - Number(a._sum.credit ?? 0);
+}

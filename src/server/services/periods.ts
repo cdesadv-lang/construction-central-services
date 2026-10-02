@@ -112,7 +112,7 @@ export async function periodChecklist(tx: Tx, periodId: string) {
 }
 
 async function chequesDueInHand(tx: Tx, companyId: string, before: Date) {
-  return tx.cheque.count({ where: { companyId, type: "RECEIVED", status: "PENDING", dueDate: { lt: before } } });
+  return tx.cheque.count({ where: { companyId, type: "RECEIVED", status: "RECEIVED", dueDate: { lt: before } } });
 }
 
 export async function setChecklistItem(tx: Tx, ctx: Ctx, periodId: string, key: string, done: boolean) {

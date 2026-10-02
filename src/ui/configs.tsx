@@ -7,6 +7,7 @@ import { DataTable } from "@/components/resource/table";
 import { ExtractPreview, JournalBalance, PartyStatement, ReportBlock } from "@/components/widgets";
 import { useLookup } from "@/components/resource/lookup";
 import { today } from "@/lib/client/format";
+import { ChequeLifecycle } from "./cheque-lifecycle";
 import { ProcurementComparison } from "./procurement-comparison";
 
 type T = (k: string, f?: string) => string;
@@ -269,7 +270,7 @@ export function buildConfigs(t: T): Record<string, ResourceConfig> {
         { key: "amount", type: "money", required: true },
         { key: "method", type: "select", options: ["CASH", "BANK", "CHEQUE"], required: true, default: "BANK" },
         { key: "cashBoxId", type: "lookup", lookup: "cash-boxes", required: true, showIf: (v) => v.method === "CASH" },
-        { key: "bankAccountId", type: "lookup", lookup: "bank-accounts", required: true, showIf: (v) => v.method === "BANK" || v.method === "CHEQUE" },
+        { key: "bankAccountId", type: "lookup", lookup: "bank-accounts", required: true, showIf: (v) => v.method === "BANK" || (v.method === "CHEQUE" && v.type !== "CLIENT_RECEIPT") },
         { key: "chequeNumber", showIf: (v) => v.method === "CHEQUE", required: true }, { key: "chequeDueDate", type: "date", showIf: (v) => v.method === "CHEQUE" },
         { key: "supplierId", type: "lookup", lookup: "suppliers", required: true, showIf: (v) => v.type === "SUPPLIER_PAYMENT" },
         { key: "supplierInvoiceId", type: "lookup", lookup: "supplier-invoices", lookupParams: (v) => ({ supplierId: v.supplierId }), showIf: (v) => v.type === "SUPPLIER_PAYMENT" },
@@ -306,15 +307,28 @@ export function buildConfigs(t: T): Record<string, ResourceConfig> {
       filters: [statusFilter, { key: "kind", type: "select", options: TREASURY_KINDS }],
     },
     cheques: {
-      resource: "cheques", module: "banks", title: t("t.cheques"), dateFilter: true,
-      columns: [{ key: "number" }, { key: "type", type: "enum" }, { key: "bankAccount.bankName", label: t("f.bankName") }, { key: "partyName" }, { key: "issueDate", type: "date" }, { key: "dueDate", type: "date" }, { key: "amount", type: "money", total: true }, { key: "status", type: "status" }, { key: "paymentId", type: "bool", label: t("f.reference"), get: (r) => !!r.paymentId }],
-      form: [
-        { key: "number", required: true, createOnly: true }, { key: "type", type: "select", options: ["ISSUED", "RECEIVED"], required: true, default: "ISSUED", createOnly: true },
-        { key: "bankAccountId", type: "lookup", lookup: "bank-accounts", required: true, createOnly: true }, { key: "amount", type: "money", required: true, createOnly: true },
-        { key: "issueDate", type: "date", required: true, default: today, createOnly: true }, { key: "dueDate", type: "date", required: true }, { key: "partyName", required: true, createOnly: true },
-        { key: "status", type: "select", options: ["PENDING", "CLEARED", "BOUNCED", "CANCELLED"], editOnly: true, required: true }, { key: "notes", span: 3 },
+      resource: "cheques", module: "banks", title: t("t.cheques"), dateFilter: true, entityType: "cheque",
+      columns: [
+        { key: "number" }, { key: "type", type: "enum" }, { key: "bankAccount.bankName", label: t("f.bankName") }, { key: "partyName" }, { key: "drawerBank", label: t("x.drawerBank") },
+        { key: "issueDate", type: "date" }, { key: "dueDate", type: "date" }, { key: "amount", type: "money", total: true }, { key: "status", type: "status" },
+        { key: "paymentId", type: "bool", label: t("f.reference"), get: (r) => !!r.paymentId },
       ],
-      filters: [{ key: "status", type: "select", options: ["PENDING", "CLEARED", "BOUNCED", "CANCELLED"] }, { key: "type", type: "select", options: ["ISSUED", "RECEIVED"] }],
+      form: [
+        { key: "number", required: true, createOnly: true }, { key: "type", type: "select", options: ["ISSUED", "RECEIVED"], required: true, default: "RECEIVED", createOnly: true },
+        { key: "bankAccountId", type: "lookup", lookup: "bank-accounts", required: true, createOnly: true, showIf: (v) => v.type === "ISSUED" },
+        { key: "drawerBank", label: t("x.drawerBank"), showIf: (v) => v.type === "RECEIVED" },
+        { key: "amount", type: "money", required: true, createOnly: true },
+        { key: "issueDate", type: "date", required: true, default: today, createOnly: true }, { key: "dueDate", type: "date", required: true },
+        { key: "partyType", type: "select", options: ["CLIENT", "SUPPLIER", "CONTRACTOR", "OTHER"], createOnly: true, default: "CLIENT" },
+        { key: "partyId", type: "lookup", lookup: "clients", createOnly: true, showIf: (v) => v.partyType === "CLIENT", onPick: (_v, _vals, p) => (p ? { partyName: p.name } : {}) },
+        { key: "partyId", type: "lookup", lookup: "suppliers", createOnly: true, showIf: (v) => v.partyType === "SUPPLIER", onPick: (_v, _vals, p) => (p ? { partyName: p.name } : {}) },
+        { key: "partyId", type: "lookup", lookup: "contractors", createOnly: true, showIf: (v) => v.partyType === "CONTRACTOR", onPick: (_v, _vals, p) => (p ? { partyName: p.name } : {}) },
+        { key: "partyName", required: true, createOnly: true },
+        { key: "counterAccountId", label: t("f.counterAccountId"), type: "lookup", lookup: "accounts", lookupParams: () => ({ isPostable: "true" }), required: true, createOnly: true },
+        { key: "notes", span: 3 },
+      ],
+      detail: (r, reload) => <ChequeLifecycle row={r} reload={reload} />,
+      filters: [{ key: "status", type: "select", options: ["RECEIVED", "ISSUED", "UNDER_COLLECTION", "DEPOSITED", "CLEARED", "BOUNCED", "CANCELLED"] }, { key: "type", type: "select", options: ["ISSUED", "RECEIVED"] }],
     },
     "purchase-requests": {
       resource: "purchase-requests", module: "procurement", title: t("t.requests"), dateFilter: true, entityType: "purchaseRequest",

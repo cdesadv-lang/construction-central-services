@@ -410,6 +410,13 @@ async function main() {
           chequeNumber: k === 0 ? String(700100 + ci) : null, chequeDueDate: k === 0 ? months[k] : null, contractorExtractId: ex.id, description: `سداد مستخلص ${full.number}`,
         });
         await post("payments", pay.id, extractCtx);
+        if (k === 0) {
+          // issued cheque presented and cleared a few days later
+          const ch = await prisma.cheque.findFirstOrThrow({ where: { paymentId: pay.id } });
+          const d = new Date(months[k]);
+          d.setUTCDate(d.getUTCDate() + 3);
+          await act(treasuryCtx, "cheques", ch.id, "clear", { date: d.toISOString().slice(0, 10) });
+        }
         k++;
       }
       ci++;
@@ -430,9 +437,16 @@ async function main() {
         if (k < fr.length - 1 || pr.seed.status === "COMPLETED") {
           const rcv = await create(treasuryCtx, "payments", {
             ...C, type: "CLIENT_RECEIPT", date: dates[k].slice(0, 8) + "28", amount: k === fr.length - 1 ? Math.round(Number(full.netAmount) * 0.6) : Number(full.netAmount),
-            method: "BANK", bankAccountId: banks[0].id, clientExtractId: ex.id, description: `تحصيل مستخلص ${full.number}`,
+            ...(k === 1 ? { method: "CHEQUE", chequeNumber: String(5100200 + k * 10 + active.indexOf(pr)), chequeDueDate: dates[k] } : { method: "BANK", bankAccountId: banks[0].id }),
+            clientExtractId: ex.id, description: `تحصيل مستخلص ${full.number}`,
           });
           await post("payments", rcv.id, treasuryCtx);
+          if (k === 1) {
+            // received cheque: send for collection, then cleared by the bank (two bank-side entries)
+            const ch = await prisma.cheque.findFirstOrThrow({ where: { paymentId: rcv.id } });
+            await act(treasuryCtx, "cheques", ch.id, "collect", { date: dates[k].slice(0, 8) + "29", bankAccountId: banks[0].id });
+            await act(treasuryCtx, "cheques", ch.id, "clear", { date: dates[k].slice(0, 8) + "30", charges: 35 });
+          }
         }
         k++;
       }
@@ -555,7 +569,16 @@ async function main() {
     void prq2;
 
     // Manual cheque register entry
-    await create(treasuryCtx, "cheques", { ...C, number: String(880000 + Math.floor(Math.random() * 9999)), type: "RECEIVED", bankAccountId: banks[0].id, amount: 250_000, issueDate: "2026-09-10", dueDate: "2026-10-15", partyName: clients[0].name, notes: "شيك مؤجل من العميل" });
+    const arId = await accountIdByKey(prisma, co.id, "AR");
+    const apId = await accountIdByKey(prisma, co.id, "AP_SUPPLIERS");
+    // post-dated cheque still in hand
+    await create(treasuryCtx, "cheques", { ...C, number: String(880100 + clients.length), type: "RECEIVED", drawerBank: "البنك الأهلي المصري", amount: 250_000, issueDate: "2026-09-10", dueDate: "2026-10-15", partyName: clients[0].name, partyType: "CLIENT", partyId: clients[0].id, counterAccountId: arId, notes: "شيك مؤجل من العميل" });
+    // deposited then bounced (with bank charges) — receivable restored on the client
+    const bounced = await create(treasuryCtx, "cheques", { ...C, number: String(880200 + clients.length), type: "RECEIVED", drawerBank: "بنك مصر", amount: 85_000, issueDate: "2026-08-05", dueDate: "2026-08-10", partyName: clients[0].name, partyType: "CLIENT", partyId: clients[0].id, counterAccountId: arId });
+    await act(treasuryCtx, "cheques", bounced.id, "deposit", { date: "2026-08-10", bankAccountId: banks[0].id });
+    await act(treasuryCtx, "cheques", bounced.id, "bounce", { date: "2026-08-14", charges: 150, notes: "رصيد غير كاف" });
+    // issued cheque to a supplier, not yet presented
+    await create(treasuryCtx, "cheques", { ...C, number: String(990300 + clients.length), type: "ISSUED", bankAccountId: banks[1 % banks.length].id, amount: 64_000, issueDate: "2026-09-18", dueDate: "2026-10-05", partyName: suppliers[0].name, partyType: "SUPPLIER", partyId: suppliers[0].id, counterAccountId: apId });
 
     // Items awaiting approval (to populate approval inbox) and drafts
     const pendingJe = await create(acc, "journal-entries", {
