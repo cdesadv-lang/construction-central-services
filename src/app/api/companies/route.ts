@@ -5,6 +5,7 @@ import { route, readJson, listParams } from "@/server/api";
 import { requirePerm } from "@/server/context";
 import { audit } from "@/server/audit";
 import { setupCompanyAccounts } from "@/server/services/accounting";
+import { createDefaultPayrollSettings } from "@/server/services/payroll";
 import { companySchema } from "./schema";
 
 export const GET = route(async ({ req, ctx }) => {
@@ -35,6 +36,7 @@ export const POST = route(async ({ req, ctx }) => {
   return prisma.$transaction(async (tx) => {
     const company = await tx.company.create({ data });
     await setupCompanyAccounts(tx, company.id);
+    await createDefaultPayrollSettings(tx, company.id);
     await tx.costCenter.create({ data: { companyId: company.id, code: "CC-HQ", name: "الإدارة العامة / Head Office" } });
     const cbAcc = await tx.account.findUniqueOrThrow({ where: { companyId_systemKey: { companyId: company.id, systemKey: "CASH_PARENT" } } });
     const acc = await tx.account.create({ data: { companyId: company.id, code: `${cbAcc.code}01`, name: "الخزينة الرئيسية", nameEn: "Main Cash Box", type: "ASSET", parentId: cbAcc.id } });

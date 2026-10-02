@@ -278,6 +278,7 @@ model Company {
   payments           Payment[]
   treasuryTxs        TreasuryTransaction[]
   cheques            Cheque[]
+  payrollSettings    PayrollSettings?
   bankRecs           BankReconciliation[]
   expenses           Expense[]
   custodies          Custody[]
@@ -1371,4 +1372,29 @@ model AccountingPeriod {
 
   @@unique([companyId, year, month])
   @@index([fiscalYearId])
+}
+
+/// Per-company payroll rules (social insurance + salary tax). Defaults: Egypt 2026 (see README).
+model PayrollSettings {
+  id                      String   @id @default(cuid())
+  companyId               String   @unique
+  company                 Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employeeInsPct          Decimal  @default(11) @db.Decimal(6, 3)
+  companyInsPct           Decimal  @default(18.75) @db.Decimal(6, 3)
+  insMinWage              Decimal  @default(2700) @db.Decimal(18, 2)
+  insMaxWage              Decimal  @default(16700) @db.Decimal(18, 2)
+  personalExemption       Decimal  @default(20000) @db.Decimal(18, 2)
+  /// [{ upTo: number | null, rate: number }] on annual taxable income
+  brackets                Json
+  /// [{ minIncome, maxIncome | null, brackets: [...] }]
+  highIncomeSchedules     Json
+  overtimeMultiplier      Decimal  @default(1.5) @db.Decimal(6, 3)
+  hoursPerMonth           Int      @default(240)
+  daysPerMonth            Int      @default(30)
+  deductionsReduceTaxable Boolean  @default(true)
+  effectiveFrom           DateTime @default(now()) @db.Date
+  sourceNote              String?
+  updatedById             String?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
 }

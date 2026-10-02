@@ -1,6 +1,7 @@
 // Pure progress-billing (مستخلصات) calculations — unit tested.
 import { D, r2 } from "./money";
 import type { Prisma } from "@prisma/client";
+import { EGYPT_2026_RULES, annualSalaryTax, insurableWage, type PayrollRules } from "./payroll-rules";
 
 type N = number | string | Prisma.Decimal | null | undefined;
 
@@ -90,38 +91,24 @@ export function calcClientExtract(i: ClientExtractInput) {
   };
 }
 
-/** Payroll line calculation (Egypt-style simplified): employee SI 11% / company 18.75% of insurance salary; flat tax brackets simplified. */
-export function calcPayrollLine(i: {
-  basic: N;
-  allowances: N;
-  overtime: N;
-  bonuses: N;
-  deductions: N;
-  insuranceSalary: N;
-  employeeInsPct?: number;
-  companyInsPct?: number;
-}) {
+/**
+ * Payroll line calculation driven by configurable rules (defaults: Egypt 2026, see payroll-rules.ts).
+ * - insurance on the insurable wage clamped to [min, max] (0 = not insured)
+ * - monthly tax = annual tax on (12 x monthly taxable - personal exemption) / 12
+ */
+export function calcPayrollLine(
+  i: { basic: N; allowances: N; overtime: N; bonuses: N; deductions: N; insuranceSalary: N },
+  rules: PayrollRules = EGYPT_2026_RULES,
+) {
   const gross = r2(D(i.basic).plus(D(i.allowances)).plus(D(i.overtime)).plus(D(i.bonuses)));
-  const insurance = r2(D(i.insuranceSalary).mul(i.employeeInsPct ?? 11).div(100));
-  const companyInsurance = r2(D(i.insuranceSalary).mul(i.companyInsPct ?? 18.75).div(100));
-  const taxable = gross.minus(insurance).minus(D(i.deductions));
-  // Simplified monthly income tax: exempt first 1,250 EGP/month (15,000/yr), then 10% up to 3,333, 15% to 3,750, 20% above.
-  const t = Math.max(0, Number(taxable.toFixed(2)) - 1250);
-  const bands: [number, number][] = [
-    [2083, 0.1],
-    [417, 0.15],
-    [Infinity, 0.2],
-  ];
-  let rem = t;
-  let tax = 0;
-  for (const [width, rate] of bands) {
-    const part = Math.min(rem, width);
-    tax += part * rate;
-    rem -= part;
-    if (rem <= 0) break;
-  }
-  const taxD = r2(tax);
+  const insWage = insurableWage(Number(D(i.insuranceSalary).toFixed(2)), rules);
+  const insurance = r2(D(insWage).mul(rules.employeeInsPct).div(100));
+  const companyInsurance = r2(D(insWage).mul(rules.companyInsPct).div(100));
   const deductions = r2(D(i.deductions));
+  const monthlyTaxable = gross.minus(insurance).minus(rules.deductionsReduceTaxable ? deductions : 0);
+  const annualTaxable = Math.max(0, Number(monthlyTaxable.mul(12).toFixed(2)) - rules.personalExemption);
+  const annualTax = annualSalaryTax(annualTaxable, rules);
+  const taxD = r2(D(annualTax).div(12));
   const net = r2(gross.minus(deductions).minus(insurance).minus(taxD));
-  return { gross, insurance, companyInsurance, tax: taxD, deductions, net };
+  return { gross, insurance, companyInsurance, tax: taxD, deductions, net, insurableWage: r2(D(insWage)), annualTaxable: r2(D(annualTaxable)) };
 }

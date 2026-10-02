@@ -306,6 +306,12 @@ const P: Record<string, Record<string, [string, string]>> = {
     exemption: ["الإعفاء الشخصي السنوي", "Annual personal exemption"], brackets: ["شرائح ضريبة كسب العمل (سنوية)", "Salary tax brackets (annual)"], upTo: ["حتى", "Up to"], rate: ["السعر %", "Rate %"],
     schedule: ["جدول", "Schedule"], incomeUpTo: ["لصافي دخل سنوي حتى", "For annual net income up to"], unlimited: ["بلا حد", "No limit"], addBracket: ["إضافة شريحة", "Add bracket"], addSchedule: ["إضافة جدول", "Add schedule"],
     source: ["المصدر", "Source"], effectiveFrom: ["سارية من", "Effective from"], resetDefaults: ["استعادة القيم القانونية", "Reset to statutory defaults"], deductPenaltiesFromTaxable: ["خصم الجزاءات من الوعاء الضريبي", "Deduct penalties from taxable income"],
+    overtimeMultiplier: ["معامل الوقت الإضافي", "Overtime multiplier"], hoursPerMonth: ["ساعات العمل الشهرية", "Working hours / month"], daysPerMonth: ["أيام الشهر (لخصم الغياب)", "Days / month (absence)"],
+    highIncome: ["جداول الدخول المرتفعة (تُلغى فيها الشرائح الأدنى)", "High-income schedules (lower brackets withdrawn)"], minIncome: ["لصافي دخل سنوي أكبر من", "For annual net income above"],
+    calculator: ["حاسبة تجريبية", "Sample calculator"], sampleGross: ["إجمالي الأجر الشهري", "Monthly gross"], sampleInsSalary: ["الأجر التأميني", "Insurance salary"],
+    insurableWage: ["أجر الاشتراك بعد الحدود", "Insurable wage (clamped)"], annualTaxable: ["الوعاء السنوي بعد الإعفاء", "Annual taxable (after exemption)"], monthlyTax: ["ضريبة كسب العمل الشهرية", "Monthly salary tax"],
+    payrollSource: ["قانون التأمينات 148/2019 وحدود الهيئة القومية للتأمين الاجتماعي 2026؛ قانون الضريبة على الدخل 91/2005 المعدل بالقانون 7/2024", "Social Insurance Law 148/2019 + NOSI 2026 limits; Income Tax Law 91/2005 as amended by Law 7/2024"],
+    selectCompanyGeneric: ["اختر شركة من الأعلى أولاً", "Select a company at the top first"],
     // fx
     currency: ["العملة", "Currency"], exchangeRate: ["سعر الصرف", "Exchange rate"], exchangeRates: ["أسعار الصرف", "Exchange rates"], baseCurrency: ["العملة الأساسية", "Base currency"],
     fxAmount: ["المبلغ بالعملة", "Amount (currency)"], baseAmount: ["المعادل بالجنيه", "Base amount (EGP)"], fxBalance: ["الرصيد بالعملة", "Balance (currency)"],

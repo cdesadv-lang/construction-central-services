@@ -6,6 +6,7 @@ import bcrypt from "bcryptjs";
 import { defaultPermissions } from "../src/lib/permissions";
 import { setupCompanyAccounts, accountIdByKey } from "../src/server/services/accounting";
 import { buildContext, type Ctx } from "../src/server/context";
+import { createDefaultPayrollSettings } from "../src/server/services/payroll";
 import { RESOURCES } from "../src/server/resources";
 import { actionResource, createResource } from "../src/server/resources/engine";
 import { prisma as appPrisma } from "../src/lib/db";
@@ -237,6 +238,7 @@ async function main() {
       contractStart: d("2024-01-01"),
     },
   });
+  await createDefaultPayrollSettings(prisma, central.id);
   await setupCompanyAccounts(prisma, central.id);
   const companies: any[] = [];
   for (const c of COMPANIES) {
@@ -247,6 +249,7 @@ async function main() {
       },
     });
     await setupCompanyAccounts(prisma, co.id);
+    await createDefaultPayrollSettings(prisma, co.id);
     await prisma.costCenter.create({ data: { companyId: co.id, code: "CC-HQ", name: "الإدارة العامة" } });
     companies.push({ ...co, seed: c });
   }
