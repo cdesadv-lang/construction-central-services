@@ -49,12 +49,21 @@ export function PayrollRulesPanel() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [sample, setSample] = useState({ gross: 20_000, ins: 20_000 });
+  /** effective date of the version being edited */
+  const [editing, setEditing] = useState<string>("");
+  const [newDate, setNewDate] = useState("");
   const readOnly = !can("payroll", "approve");
+  const load = (d: any, keep?: string) => {
+    setMeta(d);
+    const v = (d.versions ?? []).find((x: any) => x.effectiveFrom === (keep ?? d.effectiveFrom));
+    setEditing(v?.effectiveFrom ?? d.effectiveFrom ?? "");
+    setRules(v?.rules ?? d.rules);
+  };
   useEffect(() => {
     if (!companyId) return;
     setRules(null);
-    api.get(`/api/payroll-settings${qs({ companyId })}`).then((d) => { setRules(d.rules); setMeta(d); }).catch((e) => setError(e.message));
-  }, [companyId]);
+    api.get(`/api/payroll-settings${qs({ companyId })}`).then((d) => load(d)).catch((e) => setError(e.message));
+  }, [companyId]); // eslint-disable-line react-hooks/exhaustive-deps
   const validation = useMemo(() => {
     if (!rules) return null;
     try { validatePayrollRules(rules); return null; } catch (e) { return e instanceof PayrollRulesError ? e.message : String(e); }
@@ -75,13 +84,43 @@ export function PayrollRulesPanel() {
   const save = async () => {
     setBusy(true);
     try {
-      const d = await api.put(`/api/payroll-settings${qs({ companyId })}`, { ...rules, sourceNote: meta?.sourceNote ?? null });
-      setRules(d.rules); setMeta(d);
+      const note = (meta?.versions ?? []).find((x: any) => x.effectiveFrom === editing)?.sourceNote ?? meta?.sourceNote ?? null;
+      const d = await api.put(`/api/payroll-settings${qs({ companyId })}`, { ...rules, effectiveFrom: editing || undefined, sourceNote: note });
+      load(d, editing);
       toast(t("c.saved"));
     } catch (e) { toast((e as Error).message, "err"); } finally { setBusy(false); }
   };
+  const removeVersion = async (id: string, eff: string) => {
+    if (!window.confirm(`${t("x.deleteVersion")} ${eff}?`)) return;
+    try { load(await api.del(`/api/payroll-settings${qs({ companyId, id })}`)); toast(t("c.saved")); } catch (e) { toast((e as Error).message, "err"); }
+  };
+  const bool = (k: "uhiEnabled", label: string) => (
+    <label className="flex items-center gap-2 sm:col-span-4">
+      <input type="checkbox" disabled={readOnly} checked={!!rules[k]} onChange={(e) => setRules({ ...rules, [k]: e.target.checked })} />
+      <span>{label}</span>
+    </label>
+  );
   return (
     <div className="space-y-4">
+      <div className="card space-y-3 p-4">
+        <h3 className="font-bold text-slate-800">{t("x.rulesVersions")}</h3>
+        <div className="flex flex-wrap gap-2">
+          {(meta?.versions ?? []).map((v: any) => (
+            <span key={v.id} className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-sm ${v.effectiveFrom === editing ? "border-brand-500 bg-brand-50" : "border-slate-200"}`}>
+              <button className="font-semibold" onClick={() => { setEditing(v.effectiveFrom); setRules(v.rules); }}>{t("x.effectiveFrom")} {v.effectiveFrom}</button>
+              {v.id === meta?.effectiveId && <span className="text-xs text-emerald-700">({t("x.inForce")})</span>}
+              {!readOnly && (meta?.versions ?? []).length > 1 && <button className="btn btn-ghost btn-sm" title={t("x.deleteVersion")} onClick={() => removeVersion(v.id, v.effectiveFrom)}><Trash2 className="h-3.5 w-3.5" /></button>}
+            </span>
+          ))}
+        </div>
+        {!readOnly && (
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="block"><span className="label">{t("x.effectiveFrom")}</span><input type="date" className="input" value={newDate} onChange={(e) => setNewDate(e.target.value)} /></label>
+            <button className="btn btn-secondary btn-sm" disabled={!newDate} onClick={() => { setEditing(newDate); setNewDate(""); }}><Plus className="h-4 w-4" /> {t("x.newVersion")}</button>
+            <span className="text-xs text-slate-500">{t("x.effectiveFrom")}: <b>{editing}</b></span>
+          </div>
+        )}
+      </div>
       <div className="card space-y-3 p-4">
         <h3 className="font-bold text-slate-800">{t("x.insurance")}</h3>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
@@ -106,6 +145,19 @@ export function PayrollRulesPanel() {
         <Brackets value={rules.brackets} readOnly={readOnly} onChange={(b) => setRules({ ...rules, brackets: b })} />
       </div>
       <div className="card space-y-3 p-4">
+        <h3 className="font-bold text-slate-800">{t("x.otherContributions")}</h3>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+          {num("martyrsFundPct", t("x.martyrsFundPct"), "0.001")}
+        </div>
+        <div className="text-sm font-semibold text-slate-700">{t("x.uhi")}</div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+          {bool("uhiEnabled", t("x.uhiEnabled"))}
+          {num("uhiEmployeePct", t("x.uhiEmployeePct"), "0.001")}
+          {num("uhiEmployerPct", t("x.uhiEmployerPct"), "0.001")}
+          {num("uhiEmployerMin", t("x.uhiEmployerMin"))}
+        </div>
+      </div>
+      <div className="card space-y-3 p-4">
         <h3 className="font-bold text-slate-800">{t("x.highIncome")}</h3>
         {rules.highIncomeSchedules.map((s, i) => (
           <div key={i} className="rounded-lg border border-slate-200 p-3">
@@ -126,12 +178,14 @@ export function PayrollRulesPanel() {
           <label className="block"><span className="label">{t("x.sampleInsSalary")}</span><input type="number" className="input num" value={sample.ins} onChange={(e) => setSample({ ...sample, ins: Number(e.target.value) })} /></label>
         </div>
         {calc && (
-          <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-6">
+          <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-8">
             <div><div className="text-slate-500">{t("x.insurableWage")}</div><Money value={calc.insurableWage} /></div>
             <div><div className="text-slate-500">{t("x.employeeInsPct")}</div><Money value={calc.insurance} /></div>
             <div><div className="text-slate-500">{t("x.companyInsPct")}</div><Money value={calc.companyInsurance} /></div>
             <div><div className="text-slate-500">{t("x.annualTaxable")}</div><Money value={calc.annualTaxable} /></div>
             <div><div className="text-slate-500">{t("x.monthlyTax")}</div><Money value={calc.tax} /></div>
+            <div><div className="text-slate-500">{t("f.martyrsFund")}</div><Money value={calc.martyrsFund} /></div>
+            <div><div className="text-slate-500">{t("f.healthInsurance")}</div><Money value={calc.healthInsurance} /></div>
             <div><div className="text-slate-500">{t("f.net")}</div><Money value={calc.net} /></div>
           </div>
         )}

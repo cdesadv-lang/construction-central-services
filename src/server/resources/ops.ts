@@ -363,6 +363,7 @@ export const opsResources: Record<string, ResourceDef> = {
           currency: fx.currency,
           exchangeRate: fx.exchangeRate,
           totalGross: b.totalGross,
+          rulesId: b.rulesId,
           totalNet: b.totalNet,
           totalDeductions: b.totalDeductions,
           createdById: ctx.user.id,
@@ -379,7 +380,7 @@ export const opsResources: Record<string, ResourceDef> = {
           await audit(tx, ctx, { action: "RECALCULATE", entity: "payroll", entityId: e.id, companyId: e.companyId });
           return tx.payroll.update({
             where: { id: e.id },
-            data: { totalGross: b.totalGross, totalNet: b.totalNet, totalDeductions: b.totalDeductions, lines: { deleteMany: {}, create: b.lines } },
+            data: { totalGross: b.totalGross, totalNet: b.totalNet, totalDeductions: b.totalDeductions, rulesId: b.rulesId, lines: { deleteMany: {}, create: b.lines } },
           });
         },
       },

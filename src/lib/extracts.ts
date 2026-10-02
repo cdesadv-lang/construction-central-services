@@ -105,10 +105,18 @@ export function calcPayrollLine(
   const insurance = r2(D(insWage).mul(rules.employeeInsPct).div(100));
   const companyInsurance = r2(D(insWage).mul(rules.companyInsPct).div(100));
   const deductions = r2(D(i.deductions));
-  const monthlyTaxable = gross.minus(insurance).minus(rules.deductionsReduceTaxable ? deductions : 0);
+  // universal health insurance (Law 2/2018 art. 40) on the insurable wage; employer share has a monthly minimum
+  const uhi = rules.uhiEnabled && insWage > 0;
+  const healthInsurance = uhi ? r2(D(insWage).mul(rules.uhiEmployeePct).div(100)) : D(0);
+  const uhiEmployer = r2(D(insWage).mul(rules.uhiEmployerPct).div(100));
+  const companyHealthInsurance = !uhi ? D(0) : uhiEmployer.lessThan(rules.uhiEmployerMin) ? r2(D(rules.uhiEmployerMin)) : uhiEmployer;
+  // Martyrs' Fund (Law 16/2018 art. 8, as amended by Law 4/2021): 5/10,000 of the salary; not tax-deductible
+  const martyrsFund = r2(gross.mul(rules.martyrsFundPct).div(100));
+  // employee insurance contributions (social + health) reduce the taxable salary (Income Tax Law art. 13)
+  const monthlyTaxable = gross.minus(insurance).minus(healthInsurance).minus(rules.deductionsReduceTaxable ? deductions : 0);
   const annualTaxable = Math.max(0, Number(monthlyTaxable.mul(12).toFixed(2)) - rules.personalExemption);
   const annualTax = annualSalaryTax(annualTaxable, rules);
   const taxD = r2(D(annualTax).div(12));
-  const net = r2(gross.minus(deductions).minus(insurance).minus(taxD));
-  return { gross, insurance, companyInsurance, tax: taxD, deductions, net, insurableWage: r2(D(insWage)), annualTaxable: r2(D(annualTaxable)) };
+  const net = r2(gross.minus(deductions).minus(insurance).minus(healthInsurance).minus(martyrsFund).minus(taxD));
+  return { gross, insurance, companyInsurance, healthInsurance, companyHealthInsurance, martyrsFund, tax: taxD, deductions, net, insurableWage: r2(D(insWage)), annualTaxable: r2(D(annualTaxable)) };
 }

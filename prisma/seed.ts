@@ -6,7 +6,8 @@ import bcrypt from "bcryptjs";
 import { defaultPermissions } from "../src/lib/permissions";
 import { setupCompanyAccounts, accountIdByKey } from "../src/server/services/accounting";
 import { buildContext, type Ctx } from "../src/server/context";
-import { createDefaultPayrollSettings } from "../src/server/services/payroll";
+import { createDefaultPayrollSettings, STATUTORY_SOURCE_NOTE_2025 } from "../src/server/services/payroll";
+import { EGYPT_2025_RULES } from "../src/lib/payroll-rules";
 import { RESOURCES } from "../src/server/resources";
 import { actionResource, createResource } from "../src/server/resources/engine";
 import { prisma as appPrisma } from "../src/lib/db";
@@ -249,6 +250,8 @@ async function main() {
       },
     });
     await setupCompanyAccounts(prisma, co.id);
+    // payroll rules versions: 2025 (NOSI limits 2,300/14,500) and 2026 (2,700/16,700)
+    await createDefaultPayrollSettings(prisma, co.id, { effectiveFrom: "2025-01-01", rules: EGYPT_2025_RULES, sourceNote: STATUTORY_SOURCE_NOTE_2025 });
     await createDefaultPayrollSettings(prisma, co.id);
     await prisma.costCenter.create({ data: { companyId: co.id, code: "CC-HQ", name: "الإدارة العامة" } });
     companies.push({ ...co, seed: c });

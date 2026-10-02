@@ -41,12 +41,13 @@ describe("client extract calculation", () => {
 });
 
 describe("payroll line", () => {
-  it("gross = basic + allowances + overtime + bonuses; net = gross - deductions - insurance - tax", () => {
+  it("gross = basic + allowances + overtime + bonuses; net = gross - deductions - insurance - Martyrs' Fund - tax", () => {
     const r = calcPayrollLine({ basic: 10_000, allowances: 2_000, overtime: 500, bonuses: 1_000, deductions: 300, insuranceSalary: 10_000 });
     expect(r.gross.toNumber()).toBe(13_500);
     expect(r.insurance.toNumber()).toBe(1_100);
     expect(r.companyInsurance.toNumber()).toBe(1_875);
-    expect(r.net.toNumber()).toBe(Number((13_500 - 300 - 1_100 - r.tax.toNumber()).toFixed(2)));
+    expect(r.martyrsFund.toNumber()).toBe(6.75); // 0.05% of 13,500
+    expect(r.net.toNumber()).toBe(Number((13_500 - 300 - 1_100 - 6.75 - r.tax.toNumber()).toFixed(2)));
     expect(r.tax.toNumber()).toBeGreaterThan(0);
   });
   it("no tax under the exemption threshold", () => {

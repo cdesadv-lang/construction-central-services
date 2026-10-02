@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { calcPayrollLine } from "@/lib/extracts";
-import { EGYPT_2026_RULES, annualSalaryTax, insurableWage, toPayrollRules, validatePayrollRules, PayrollRulesError } from "@/lib/payroll-rules";
+import { EGYPT_2025_RULES, EGYPT_2026_RULES, annualSalaryTax, insurableWage, toPayrollRules, validatePayrollRules, PayrollRulesError } from "@/lib/payroll-rules";
 
 describe("Egyptian salary tax (Law 7/2024 schedules)", () => {
   it.each([
@@ -35,7 +35,27 @@ describe("payroll line with statutory rules", () => {
     expect(r.companyInsurance.toNumber()).toBe(3_131.25);
     expect(r.annualTaxable.toNumber()).toBe(197_956); // (20,000 - 1,837) x 12 - 20,000
     expect(r.tax.toNumber()).toBe(2_445.1); // 29,341.20 / 12
-    expect(r.net.toNumber()).toBe(15_717.9);
+    expect(r.martyrsFund.toNumber()).toBe(10); // 5/10,000 of 20,000
+    expect(r.healthInsurance.toNumber()).toBe(0); // UHI off by default
+    expect(r.net.toNumber()).toBe(15_707.9); // 20,000 - 1,837 - 2,445.10 - 10
+  });
+  it("universal health insurance: employee 1%, employer 4% (min 50) of the insurable wage; employee share reduces taxable", () => {
+    const rules = { ...EGYPT_2026_RULES, uhiEnabled: true };
+    const r = calcPayrollLine({ basic: 20_000, allowances: 0, overtime: 0, bonuses: 0, deductions: 0, insuranceSalary: 20_000 }, rules);
+    expect(r.healthInsurance.toNumber()).toBe(167);
+    expect(r.companyHealthInsurance.toNumber()).toBe(668);
+    expect(r.annualTaxable.toNumber()).toBe(197_956 - 167 * 12);
+    expect(r.net.toNumber()).toBeCloseTo(20_000 - 1_837 - 167 - 10 - r.tax.toNumber(), 2);
+    const low = calcPayrollLine({ basic: 1_000, allowances: 0, overtime: 0, bonuses: 0, deductions: 0, insuranceSalary: 1_000 }, { ...rules, insMinWage: 0 });
+    expect(low.companyHealthInsurance.toNumber()).toBe(50); // 4% = 40 -> minimum 50
+    const uninsured = calcPayrollLine({ basic: 5_000, allowances: 0, overtime: 0, bonuses: 0, deductions: 0, insuranceSalary: 0 }, rules);
+    expect(uninsured.healthInsurance.toNumber()).toBe(0);
+    expect(uninsured.martyrsFund.toNumber()).toBe(2.5);
+  });
+  it("2025 version keeps the tax law but uses the 2025 NOSI limits", () => {
+    expect(EGYPT_2025_RULES.insMinWage).toBe(2_300);
+    expect(EGYPT_2025_RULES.insMaxWage).toBe(14_500);
+    expect(EGYPT_2025_RULES.brackets).toEqual(EGYPT_2026_RULES.brackets);
   });
   it("uses company-specific rules", () => {
     const rules = { ...EGYPT_2026_RULES, employeeInsPct: 10, insMaxWage: 100_000, personalExemption: 0, brackets: [{ upTo: null, rate: 10 }], highIncomeSchedules: [] };

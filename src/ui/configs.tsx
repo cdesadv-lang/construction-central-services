@@ -557,7 +557,7 @@ function PayrollLines({ row, t }: { row: AnyRow; t: T }) {
           totals
           columns={[
             { key: "employeeName" },
-            ...["basic", "allowances", "overtime", "bonuses", "gross", "deductions", "insurance", "tax", "net", "companyInsurance"].map((k) => ({ key: k, type: "money" as const, total: true })),
+            ...["basic", "allowances", "overtime", "bonuses", "gross", "deductions", "insurance", "healthInsurance", "martyrsFund", "tax", "net", "companyInsurance", "companyHealthInsurance"].map((k) => ({ key: k, type: "money" as const, total: true })),
             { key: "allocations", label: t("f.allocations"), get: (l) => (Array.isArray(l.allocations) ? l.allocations.map((a: AnyRow) => `${pc.get(a.projectId) ?? "-"} ${a.percent}%`).join("، ") : "") },
           ]}
         />

@@ -242,8 +242,8 @@ model UserProject {
 
 // ───────────────────────── Companies & projects ─────────────────────────
 model Company {
-  id                 String         @id @default(cuid())
-  code               String         @unique
+  id                 String          @id @default(cuid())
+  code               String          @unique
   name               String
   nameEn             String?
   commercialRegister String?
@@ -254,14 +254,14 @@ model Company {
   contactPerson      String?
   contractStart      DateTime?
   contractEnd        DateTime?
-  servicePackage     ServicePackage @default(STANDARD)
-  status             CompanyStatus  @default(ACTIVE)
+  servicePackage     ServicePackage  @default(STANDARD)
+  status             CompanyStatus   @default(ACTIVE)
   /// base (functional) currency of the books — only EGP is supported for posting
-  baseCurrency       String         @default("EGP") @db.VarChar(3)
+  baseCurrency       String          @default("EGP") @db.VarChar(3)
   exchangeRates      ExchangeRate[]
   fxRevaluations     FxRevaluation[]
-  createdAt          DateTime       @default(now())
-  updatedAt          DateTime       @updatedAt
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
 
   users              UserCompany[]
   projects           Project[]
@@ -282,7 +282,7 @@ model Company {
   payments           Payment[]
   treasuryTxs        TreasuryTransaction[]
   cheques            Cheque[]
-  payrollSettings    PayrollSettings?
+  payrollSettings    PayrollSettings[]
   bankRecs           BankReconciliation[]
   expenses           Expense[]
   custodies          Custody[]
@@ -729,9 +729,9 @@ model ClientExtract {
   insuranceAmount Decimal   @default(0) @db.Decimal(18, 2)
   netAmount       Decimal   @default(0) @db.Decimal(18, 2)
   paidAmount      Decimal   @default(0) @db.Decimal(18, 2)
-  currency        String      @default("EGP") @db.VarChar(3)
+  currency        String    @default("EGP") @db.VarChar(3)
   /// EGP per 1 unit of currency (snapshot taken from the exchange-rate table unless entered)
-  exchangeRate    Decimal     @default(1) @db.Decimal(18, 6)
+  exchangeRate    Decimal   @default(1) @db.Decimal(18, 6)
   description     String?
   status          DocStatus @default(DRAFT)
   journalEntryId  String?
@@ -1281,6 +1281,8 @@ model Payroll {
   currency        String        @default("EGP") @db.VarChar(3)
   /// EGP per 1 unit of currency at month end (statutory insurance/tax are computed on the EGP equivalent)
   exchangeRate    Decimal       @default(1) @db.Decimal(18, 6)
+  /// payroll-rules version used for the calculation (traceability)
+  rulesId         String?
   status          DocStatus     @default(DRAFT)
   journalEntryId  String?
   createdById     String?
@@ -1292,22 +1294,28 @@ model Payroll {
 }
 
 model PayrollLine {
-  id               String  @id @default(cuid())
-  payrollId        String
-  payroll          Payroll @relation(fields: [payrollId], references: [id], onDelete: Cascade)
-  employeeId       String
-  employeeName     String
-  basic            Decimal @db.Decimal(18, 2)
-  allowances       Decimal @db.Decimal(18, 2)
-  overtime         Decimal @db.Decimal(18, 2)
-  bonuses          Decimal @db.Decimal(18, 2)
-  deductions       Decimal @db.Decimal(18, 2)
-  insurance        Decimal @db.Decimal(18, 2)
-  companyInsurance Decimal @default(0) @db.Decimal(18, 2)
-  tax              Decimal @db.Decimal(18, 2)
-  gross            Decimal @db.Decimal(18, 2)
-  net              Decimal @db.Decimal(18, 2)
-  allocations      Json
+  id                     String  @id @default(cuid())
+  payrollId              String
+  payroll                Payroll @relation(fields: [payrollId], references: [id], onDelete: Cascade)
+  employeeId             String
+  employeeName           String
+  basic                  Decimal @db.Decimal(18, 2)
+  allowances             Decimal @db.Decimal(18, 2)
+  overtime               Decimal @db.Decimal(18, 2)
+  bonuses                Decimal @db.Decimal(18, 2)
+  deductions             Decimal @db.Decimal(18, 2)
+  insurance              Decimal @db.Decimal(18, 2)
+  companyInsurance       Decimal @default(0) @db.Decimal(18, 2)
+  /// employee universal health insurance (1%)
+  healthInsurance        Decimal @default(0) @db.Decimal(18, 2)
+  /// employer universal health insurance (4%, min 50 EGP)
+  companyHealthInsurance Decimal @default(0) @db.Decimal(18, 2)
+  /// Martyrs' Fund deduction (0.05% of gross)
+  martyrsFund            Decimal @default(0) @db.Decimal(18, 2)
+  tax                    Decimal @db.Decimal(18, 2)
+  gross                  Decimal @db.Decimal(18, 2)
+  net                    Decimal @db.Decimal(18, 2)
+  allocations            Json
 }
 
 // ───────────────────────── Documents, notifications, audit ─────────────────────────
@@ -1378,23 +1386,23 @@ enum PeriodStatus {
 
 /// Fiscal year of a company (12 monthly periods, may start in any month).
 model FiscalYear {
-  id           String             @id @default(cuid())
-  companyId    String
-  company      Company            @relation(fields: [companyId], references: [id])
-  name         String
-  startDate    DateTime
-  endDate      DateTime
-  status       PeriodStatus       @default(OPEN)
-  closedAt     DateTime?
-  closedById   String?
-  reopenedAt   DateTime?
-  reopenedById String?
-  reopenReason String?
-  notes        String?
+  id             String             @id @default(cuid())
+  companyId      String
+  company        Company            @relation(fields: [companyId], references: [id])
+  name           String
+  startDate      DateTime
+  endDate        DateTime
+  status         PeriodStatus       @default(OPEN)
+  closedAt       DateTime?
+  closedById     String?
+  reopenedAt     DateTime?
+  reopenedById   String?
+  reopenReason   String?
+  notes          String?
   /// year-end closing entry (revenue & expense balances closed to retained earnings); null while the year is open
   closingEntryId String?
-  createdAt    DateTime           @default(now())
-  periods      AccountingPeriod[]
+  createdAt      DateTime           @default(now())
+  periods        AccountingPeriod[]
 
   @@unique([companyId, name])
   @@index([companyId, startDate])
@@ -1428,9 +1436,10 @@ model AccountingPeriod {
 }
 
 /// Per-company payroll rules (social insurance + salary tax). Defaults: Egypt 2026 (see README).
+/// Versioned payroll rules: one row per company and effective date (a payroll uses the version in force on the 1st of its month).
 model PayrollSettings {
   id                      String   @id @default(cuid())
-  companyId               String   @unique
+  companyId               String
   company                 Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   employeeInsPct          Decimal  @default(11) @db.Decimal(6, 3)
   companyInsPct           Decimal  @default(18.75) @db.Decimal(6, 3)
@@ -1445,11 +1454,21 @@ model PayrollSettings {
   hoursPerMonth           Int      @default(240)
   daysPerMonth            Int      @default(30)
   deductionsReduceTaxable Boolean  @default(true)
+  /// Martyrs' Fund % of gross salary (Law 16/2018 art. 8 as amended by Law 4/2021: 5 per 10,000)
+  martyrsFundPct          Decimal  @default(0.05) @db.Decimal(6, 3)
+  /// universal health insurance (Law 2/2018 art. 40) — only in governorates where the system is in force
+  uhiEnabled              Boolean  @default(false)
+  uhiEmployeePct          Decimal  @default(1) @db.Decimal(6, 3)
+  uhiEmployerPct          Decimal  @default(4) @db.Decimal(6, 3)
+  uhiEmployerMin          Decimal  @default(50) @db.Decimal(18, 2)
   effectiveFrom           DateTime @default(now()) @db.Date
   sourceNote              String?
   updatedById             String?
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
+
+  @@unique([companyId, effectiveFrom])
+  @@index([companyId])
 }
 
 /// Exchange rates to the base currency (EGP per 1 unit), per company and day.

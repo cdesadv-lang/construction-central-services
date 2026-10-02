@@ -48,6 +48,7 @@ export const COA_TEMPLATE: TplAccount[] = [
   { code: "2108", name: "دفعات مقدمة من العملاء", nameEn: "Client Advances", type: "LIABILITY", parent: "21", key: "CLIENT_ADVANCES" },
   { code: "2109", name: "ضريبة القيمة المضافة - مخرجات", nameEn: "Output VAT", type: "LIABILITY", parent: "21", key: "VAT_OUTPUT" },
   { code: "2110", name: "أوراق دفع - شيكات صادرة", nameEn: "Notes Payable - Issued Cheques", type: "LIABILITY", parent: "21", key: "NOTES_PAYABLE" },
+  { code: "2111", name: "صندوق تكريم الشهداء - مستحق", nameEn: "Martyrs' Fund Payable", type: "LIABILITY", parent: "21", key: "MARTYRS_FUND_PAYABLE" },
   { code: "3", name: "حقوق الملكية", nameEn: "Equity", type: "EQUITY", postable: false },
   { code: "3101", name: "رأس المال", nameEn: "Capital", type: "EQUITY", parent: "3", key: "CAPITAL" },
   { code: "3201", name: "أرباح مرحلة", nameEn: "Retained Earnings", type: "EQUITY", parent: "3", key: "RETAINED_EARNINGS" },

@@ -294,9 +294,10 @@ async function buildEntry(tx: Tx, docType: DocType, doc: any): Promise<{ lines: 
       const payroll = await tx.payroll.findUnique({ where: { id: doc.id }, include: { lines: true } });
       if (!payroll || !payroll.lines.length) throw unprocessable("Payroll has no lines");
       const costByProject = new Map<string, ReturnType<typeof D>>();
-      let net = D(0), ins = D(0), tax = D(0), ded = D(0);
+      let net = D(0), ins = D(0), tax = D(0), ded = D(0), martyrs = D(0);
       for (const l of payroll.lines) {
-        const cost = r2(D(l.gross).plus(D(l.companyInsurance)));
+        // employer cost: gross + employer social insurance + employer health insurance
+        const cost = r2(D(l.gross).plus(D(l.companyInsurance)).plus(D(l.companyHealthInsurance)));
         const allocs = (Array.isArray(l.allocations) ? l.allocations : []) as { projectId: string | null; percent: number }[];
         const list = allocs.length ? allocs : [{ projectId: payroll.projectId, percent: 100 }];
         let allocated = D(0);
@@ -307,7 +308,9 @@ async function buildEntry(tx: Tx, docType: DocType, doc: any): Promise<{ lines: 
           costByProject.set(k, (costByProject.get(k) ?? D(0)).plus(part));
         });
         net = net.plus(D(l.net));
-        ins = ins.plus(D(l.insurance)).plus(D(l.companyInsurance));
+        // social + universal health insurance are both collected by NOSI with the monthly contribution form
+        ins = ins.plus(D(l.insurance)).plus(D(l.companyInsurance)).plus(D(l.healthInsurance)).plus(D(l.companyHealthInsurance));
+        martyrs = martyrs.plus(D(l.martyrsFund));
         tax = tax.plus(D(l.tax));
         ded = ded.plus(D(l.deductions));
       }
@@ -321,6 +324,7 @@ async function buildEntry(tx: Tx, docType: DocType, doc: any): Promise<{ lines: 
         { accountId: await acc("SALARIES_PAYABLE"), credit: r2(net) },
         { accountId: await acc("INSURANCE_PAYABLE"), credit: r2(ins) },
         { accountId: await acc("PAYROLL_TAX_PAYABLE"), credit: r2(tax) },
+        ...(martyrs.greaterThan(0) ? [{ accountId: await acc("MARTYRS_FUND_PAYABLE"), credit: r2(martyrs) }] : []),
         { accountId: await acc("PENALTIES_INCOME"), credit: r2(ded) },
       );
       return { date: monthEnd(payroll.month), projectId: payroll.projectId, description: `مسير رواتب ${payroll.number} - ${payroll.month}`, lines: lines.filter(nz) };

@@ -163,7 +163,8 @@ describe("multi-currency", () => {
     const effective = Number(l.tax) / Number(l.gross);
     expect(effective).toBeGreaterThan(0.15);
     expect(effective).toBeLessThan(0.275);
-    expect(Number(l.net)).toBeCloseTo(Number(l.gross) - Number(l.deductions) - Number(l.insurance) - Number(l.tax), 2);
+    expect(Number(l.net)).toBeCloseTo(Number(l.gross) - Number(l.deductions) - Number(l.insurance) - Number(l.healthInsurance) - Number(l.martyrsFund) - Number(l.tax), 2);
+    expect(Number(l.martyrsFund)).toBeCloseTo(3_500 * 0.0005, 2);
     const je = await prisma.journalEntry.findFirstOrThrow({ where: { sourceType: "PAYROLL", sourceId: usdPr.id }, include: { lines: true } });
     expect(je.lines.every((x) => x.currency === "USD")).toBe(true);
     expect(Number(je.totalDebit)).toBeCloseTo((Number(usdPr.totalGross) + usdPr.lines.reduce((s, x) => s + Number(x.companyInsurance), 0)) * Number(usdPr.exchangeRate), -1);

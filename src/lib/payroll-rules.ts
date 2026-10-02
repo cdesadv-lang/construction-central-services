@@ -8,6 +8,13 @@
  *  - Salary tax (Income Tax Law 91/2005 as amended by Law 7/2024): annual personal exemption
  *    20,000 EGP, progressive brackets on annual net taxable income, with special schedules for
  *    high incomes (> 600,000) where the lower brackets are withdrawn.
+ *  - Martyrs' Fund (Law 16/2018 art. 8 as amended by Law 4/2021): 5 per 10,000 (0.05%) of the monthly
+ *    salary of employees of private legal persons under the labour law (irregular/daily workers excluded),
+ *    withheld by the employer and remitted to the Ministry of Finance.
+ *  - Universal (comprehensive) health insurance (Law 2/2018 art. 40): employee 1% and employer 4% of the
+ *    insurable wage, employer minimum 50 EGP/month — only where the system is in force (phased rollout by
+ *    governorate), hence disabled by default.
+ * Rules are versioned by effective date; a payroll uses the version in force on the first day of its month.
  */
 export interface TaxBracket {
   /** upper bound of the bracket on annual taxable income; null = no limit */
@@ -33,6 +40,14 @@ export interface PayrollRules {
   hoursPerMonth: number;
   daysPerMonth: number;
   deductionsReduceTaxable: boolean;
+  /** Martyrs' Fund % of gross salary (0.05 = 5 per 10,000) */
+  martyrsFundPct: number;
+  /** universal health insurance (Law 2/2018) applies to this company */
+  uhiEnabled: boolean;
+  uhiEmployeePct: number;
+  uhiEmployerPct: number;
+  /** minimum monthly employer contribution (EGP) */
+  uhiEmployerMin: number;
 }
 
 export const EGYPT_STANDARD_BRACKETS: TaxBracket[] = [
@@ -65,7 +80,15 @@ export const EGYPT_2026_RULES: PayrollRules = {
   hoursPerMonth: 240,
   daysPerMonth: 30,
   deductionsReduceTaxable: true,
+  martyrsFundPct: 0.05,
+  uhiEnabled: false,
+  uhiEmployeePct: 1,
+  uhiEmployerPct: 4,
+  uhiEmployerMin: 50,
 };
+
+/** 2025: same tax law; NOSI insurable wage limits 2,300 / 14,500 (raised on 1 Jan 2026). */
+export const EGYPT_2025_RULES: PayrollRules = { ...EGYPT_2026_RULES, insMinWage: 2_300, insMaxWage: 14_500 };
 
 export class PayrollRulesError extends Error {}
 
@@ -97,6 +120,10 @@ export function validatePayrollRules(r: PayrollRules): PayrollRules {
   if (!(r.personalExemption >= 0)) throw new PayrollRulesError("Personal exemption must be >= 0");
   if (!(r.overtimeMultiplier >= 1)) throw new PayrollRulesError("Overtime multiplier must be >= 1");
   if (!(r.hoursPerMonth > 0) || !(r.daysPerMonth > 0)) throw new PayrollRulesError("Hours/days per month must be > 0");
+  pct(r.martyrsFundPct, "Martyrs' Fund %");
+  pct(r.uhiEmployeePct, "Health insurance employee %");
+  pct(r.uhiEmployerPct, "Health insurance employer %");
+  if (!(r.uhiEmployerMin >= 0)) throw new PayrollRulesError("Health insurance employer minimum must be >= 0");
   checkBrackets(r.brackets, "Standard schedule");
   let prevMax = -1;
   [...r.highIncomeSchedules]
@@ -155,6 +182,11 @@ export function toPayrollRules(row: Record<string, unknown> | null | undefined):
     hoursPerMonth: n("hoursPerMonth"),
     daysPerMonth: n("daysPerMonth"),
     deductionsReduceTaxable: row.deductionsReduceTaxable === undefined || row.deductionsReduceTaxable === null ? true : Boolean(row.deductionsReduceTaxable),
+    martyrsFundPct: n("martyrsFundPct"),
+    uhiEnabled: row.uhiEnabled === undefined || row.uhiEnabled === null ? false : Boolean(row.uhiEnabled),
+    uhiEmployeePct: n("uhiEmployeePct"),
+    uhiEmployerPct: n("uhiEmployerPct"),
+    uhiEmployerMin: n("uhiEmployerMin"),
     brackets: Array.isArray(row.brackets) && row.brackets.length ? brackets(row.brackets) : EGYPT_STANDARD_BRACKETS,
     highIncomeSchedules: Array.isArray(row.highIncomeSchedules)
       ? (row.highIncomeSchedules as any[]).map((s) => ({ minIncome: Number(s.minIncome), maxIncome: s.maxIncome === null || s.maxIncome === undefined || s.maxIncome === "" ? null : Number(s.maxIncome), brackets: brackets(s.brackets) })) // eslint-disable-line @typescript-eslint/no-explicit-any
