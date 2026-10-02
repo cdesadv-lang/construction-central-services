@@ -1261,3 +1261,12 @@ model AuditLog {
   @@index([companyId, createdAt])
   @@index([entity, entityId])
 }
+
+/// Persistent login throttling (survives restarts, shared across instances).
+model LoginThrottle {
+  key         String    @id
+  failures    Int       @default(0)
+  windowStart DateTime  @default(now())
+  lockedUntil DateTime?
+  updatedAt   DateTime  @updatedAt
+}

@@ -39,18 +39,54 @@ export async function destroySession(token: string | undefined | null) {
   await prisma.session.deleteMany({ where: { tokenHash: hashToken(token) } });
 }
 
-// Simple in-memory login throttling (per process): 10 failures / 15 min per email+ip.
-const failures = new Map<string, { count: number; until: number }>();
-export function loginThrottled(key: string) {
-  const f = failures.get(key);
-  return !!f && f.count >= 10 && f.until > Date.now();
+// Persistent login throttling (table LoginThrottle). Two keys per attempt:
+//  - "acct:<email>|<ip>": 10 failures within 15 min locks that email+ip for 15 min
+//  - "email:<email>": 30 failures within 15 min locks the email from any ip (spoofed X-Forwarded-For can't bypass it)
+//  - "ip:<ip>": 50 failures within 15 min locks the ip (credential-stuffing guard)
+export const THROTTLE = {
+  windowMs: Number(process.env.LOGIN_WINDOW_MINUTES ?? 15) * 60_000,
+  lockMs: Number(process.env.LOGIN_LOCK_MINUTES ?? 15) * 60_000,
+  maxPerAccount: Number(process.env.LOGIN_MAX_FAILURES ?? 10),
+  maxPerEmail: Number(process.env.LOGIN_MAX_FAILURES_PER_EMAIL ?? 30),
+  maxPerIp: Number(process.env.LOGIN_MAX_FAILURES_PER_IP ?? 50),
+};
+
+export const throttleKeys = (email: string, ip: string | null) => ({ acct: `acct:${email}|${ip ?? "-"}`, email: `email:${email}`, ip: `ip:${ip ?? "-"}` });
+
+/** Returns the lock expiry if either key is currently locked. */
+export async function loginThrottled(email: string, ip: string | null): Promise<Date | null> {
+  const k = throttleKeys(email, ip);
+  const rows = await prisma.loginThrottle.findMany({ where: { key: { in: [k.acct, k.email, k.ip] }, lockedUntil: { gt: new Date() } } });
+  if (!rows.length) return null;
+  return rows.reduce((m, r) => (r.lockedUntil! > m ? r.lockedUntil! : m), rows[0].lockedUntil!);
 }
-export function recordLoginFailure(key: string) {
-  const f = failures.get(key);
-  const until = Date.now() + 15 * 60 * 1000;
-  if (!f || f.until < Date.now()) failures.set(key, { count: 1, until });
-  else failures.set(key, { count: f.count + 1, until });
+
+async function bump(key: string, max: number) {
+  const now = new Date();
+  const windowFrom = new Date(now.getTime() - THROTTLE.windowMs);
+  const lockUntil = new Date(now.getTime() + THROTTLE.lockMs);
+  // Atomic upsert: restart the window if it expired, otherwise increment; lock when the threshold is reached.
+  await prisma.$executeRaw`
+    INSERT INTO "LoginThrottle" ("key", "failures", "windowStart", "lockedUntil", "updatedAt")
+    VALUES (${key}, 1, ${now}, NULL, ${now})
+    ON CONFLICT ("key") DO UPDATE SET
+      "failures"    = CASE WHEN "LoginThrottle"."windowStart" < ${windowFrom} THEN 1 ELSE "LoginThrottle"."failures" + 1 END,
+      "windowStart" = CASE WHEN "LoginThrottle"."windowStart" < ${windowFrom} THEN ${now} ELSE "LoginThrottle"."windowStart" END,
+      "lockedUntil" = CASE
+        WHEN "LoginThrottle"."windowStart" >= ${windowFrom} AND "LoginThrottle"."failures" + 1 >= ${max} THEN ${lockUntil}
+        ELSE "LoginThrottle"."lockedUntil" END,
+      "updatedAt"   = ${now}`;
 }
-export function clearLoginFailures(key: string) {
-  failures.delete(key);
+
+export async function recordLoginFailure(email: string, ip: string | null) {
+  const k = throttleKeys(email, ip);
+  await bump(k.acct, THROTTLE.maxPerAccount);
+  await bump(k.email, THROTTLE.maxPerEmail);
+  await bump(k.ip, THROTTLE.maxPerIp);
+}
+
+export async function clearLoginFailures(email: string, ip: string | null) {
+  await prisma.loginThrottle.deleteMany({ where: { key: throttleKeys(email, ip).acct } });
+  // Opportunistic cleanup of stale rows
+  await prisma.loginThrottle.deleteMany({ where: { updatedAt: { lt: new Date(Date.now() - 24 * 3600_000) } } });
 }
