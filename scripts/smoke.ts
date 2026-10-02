@@ -69,7 +69,7 @@ async function main() {
   }
 
   // every resource list endpoint
-  const resources = ["projects", "clients", "project-budgets", "accounts", "cost-centers", "journal-entries", "suppliers", "supplier-invoices", "contractors", "subcontracts", "contractor-extracts", "client-extracts", "expenses", "custodies", "payments", "cash-boxes", "bank-accounts", "treasury-transactions", "cheques", "bank-reconciliations", "purchase-requests", "quotations", "purchase-orders", "goods-receipts", "departments", "positions", "employees", "employee-allocations", "employee-contracts", "attendance", "leave-requests", "hr-adjustments", "payrolls", "fiscal-years", "accounting-periods", "exchange-rates"];
+  const resources = ["projects", "clients", "project-budgets", "accounts", "cost-centers", "journal-entries", "suppliers", "supplier-invoices", "contractors", "subcontracts", "contractor-extracts", "client-extracts", "expenses", "custodies", "payments", "cash-boxes", "bank-accounts", "treasury-transactions", "cheques", "bank-reconciliations", "purchase-requests", "quotations", "purchase-orders", "goods-receipts", "departments", "positions", "employees", "employee-allocations", "employee-contracts", "attendance", "leave-requests", "hr-adjustments", "payrolls", "fiscal-years", "accounting-periods", "exchange-rates", "fx-revaluations"];
   for (const r of resources) {
     const res = await call("GET", `/api/${r}?pageSize=5`, { cookie: admin });
     check(`GET /api/${r}`, res.status === 200 && Array.isArray(res.data?.items), res.status);
@@ -197,7 +197,7 @@ async function main() {
   const pay = await call("POST", "/api/payrolls", { cookie: S.hr, body: { companyId: C.UNITED, month: "2026-11" } });
   check("generate payroll run", pay.status === 201 && Number(pay.data.totalNet) > 0, pay.json);
   const payFull = (await call("GET", `/api/payrolls/${pay.data.id}`, { cookie: S.hr })).data;
-  check("payroll lines net = gross - deductions", payFull.lines.length > 0 && payFull.lines.every((l: any) => Math.abs(Number(l.gross) - Number(l.insurance) - Number(l.tax) - Number(l.deductions) - Number(l.net)) < 0.02), payFull.lines[0]);
+  check("payroll lines net = gross - deductions - insurance - UHI - martyrs - tax", payFull.lines.length > 0 && payFull.lines.every((l: any) => Math.abs(Number(l.gross) - Number(l.insurance) - Number(l.healthInsurance) - Number(l.martyrsFund) - Number(l.tax) - Number(l.deductions) - Number(l.net)) < 0.02), payFull.lines[0]);
   check("delete draft payroll", (await call("DELETE", `/api/payrolls/${pay.data.id}`, { cookie: admin })).status === 200);
 
   // ── documents ──
@@ -264,6 +264,36 @@ async function main() {
   check("currency without a rate -> 422", noRate.status === 422, noRate.status);
   const banksList = (await call("GET", `/api/bank-accounts?companyId=${C.NILE}`, { cookie: S.treasury })).data.items as any[];
   check("USD bank shows USD balance", Number(banksList.find((b) => b.id === usdBank.id)?.fxBalance) > 0);
+
+  // ── multi-currency documents, FX revaluation ──
+  const usdSubs = (await call("GET", `/api/subcontracts?companyId=${C.NILE}`, { cookie: S.extracts })).data.items as any[];
+  check("USD subcontract seeded", usdSubs.some((x) => x.currency === "USD"));
+  const usdPayrolls = (await call("GET", `/api/payrolls?companyId=${C.NILE}`, { cookie: S.hr })).data.items as any[];
+  check("USD payroll seeded (per salary currency)", usdPayrolls.some((x) => x.currency === "USD" && x.status === "POSTED"));
+  const usdCust = (await call("GET", `/api/custodies?companyId=${C.NILE}`, { cookie: S["acc.nile"] })).data.items as any[];
+  check("USD custody seeded", usdCust.some((x) => x.currency === "USD"));
+  const expAcc = (await call("GET", `/api/accounts?companyId=${C.NILE}&q=5103`, { cookie: S["acc.nile"] })).data.items[0];
+  const fxJe = await call("POST", "/api/journal-entries", { cookie: S["acc.nile"], body: { companyId: C.NILE, date: "2026-09-16", currency: "USD", exchangeRate: 48, description: "smoke USD JE", lines: [{ accountId: expAcc.id, debit: 10 }, { accountId: usdBank.accountId, credit: 10 }] } });
+  check("manual USD journal entry converted to EGP", fxJe.status === 201 && Number(fxJe.data.totalDebit) === 480, fxJe.json);
+  const revals = (await call("GET", `/api/fx-revaluations?companyId=${C.NILE}`, { cookie: S.chief })).data?.items as any[];
+  check("seeded FX revaluations are auto-reversed", revals?.length === 2 && revals.every((r) => r.status === "REVERSED" && r.reversalEntry), revals);
+  const revalPrev = await call("GET", `/api/fx-revaluations/preview?companyId=${C.NILE}&date=2026-10-01&rate.USD=47`, { cookie: S.chief });
+  check("FX revaluation preview", revalPrev.status === 200 && Array.isArray(revalPrev.data.lines) && revalPrev.data.lines.length > 0 && revalPrev.data.rates.USD === 47, revalPrev.json);
+  check("accountant cannot post a revaluation -> 403", (await call("POST", "/api/fx-revaluations", { cookie: S["acc.nile"], body: { companyId: C.NILE, date: "2026-10-01" } })).status === 403);
+  check("viewer cannot preview another company's revaluation -> 403", (await call("GET", `/api/fx-revaluations/preview?companyId=${C.UNITED}&date=2026-10-01`, { cookie: S.viewer })).status === 403);
+
+  // ── year-end close, fiscal-year validation, cheque expenses, payroll rule versions ──
+  const fys = (await call("GET", `/api/fiscal-years?companyId=${C.NILE}`, { cookie: S.cfo })).data.items as any[];
+  const fy25 = fys.find((f) => f.name === "2025");
+  check("FY2025 closed with a closing entry", fy25?.status === "CLOSED" && !!fy25.closingEntry, fy25);
+  const outside = await call("POST", "/api/journal-entries", { cookie: S["acc.nile"], body: { companyId: C.NILE, date: "2024-03-01", description: "outside FY", lines: [{ accountId: expAcc.id, debit: 1 }, { accountId: usdBank.accountId, credit: 1 }] } });
+  check("entry dated outside every fiscal year -> 422", outside.status === 422, outside.status);
+  const chqList = (await call("GET", `/api/cheques?companyId=${C.NILE}&pageSize=200`, { cookie: S.treasury })).data.items as any[];
+  check("expense paid by cheque registered in the cheque lifecycle", chqList.some((c) => c.expenseId && c.status === "CLEARED"));
+  const prs = await call("GET", `/api/payroll-settings?companyId=${C.NILE}&date=2025-06-01`, { cookie: S.hr });
+  check("payroll rules versioned by effective date", prs.status === 200 && prs.data.versions.length === 2 && prs.data.rules.insMaxWage === 14500 && prs.data.rules.martyrsFundPct === 0.05, prs.data);
+  const deep = await call("GET", "/api/health?deep=1");
+  check("deep health: storage ok", deep.status === 200 && deep.data.storage?.status === "ok", deep.json);
 
   // ── quotation lines linked by request-item id ──
   const pr2 = await call("POST", "/api/purchase-requests", { cookie: S.procurement, body: { companyId: C.NILE, date: "2026-09-22", requestedBy: "م. الموقع", items: [{ description: "رمل", unit: "م3", quantity: 30 }] } });
