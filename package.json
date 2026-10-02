@@ -3,10 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 3000",
     "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
+    "start": "next start -p 3000",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:migrate": "prisma migrate deploy",
+    "db:migrate:dev": "prisma migrate dev",
+    "db:seed": "prisma db seed",
+    "db:reset": "prisma migrate reset --force",
+    "smoke": "tsx scripts/smoke.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
@@ -35,5 +43,8 @@
     "tsx": "^4.23.15",
     "typescript": "^5",
     "vitest": "^3.2.7"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   }
 }

@@ -168,7 +168,7 @@ const MATRIX: Record<RoleKey, Grant> = {
   HR_OFFICER: {
     ...base,
     projects: "v",
-    hr: "vced",
+    hr: "vcead",
     payroll: "vce",
     custody: "v",
     reports: "v",
