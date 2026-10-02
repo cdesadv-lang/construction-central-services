@@ -162,6 +162,65 @@ async function main() {
   check("contractor extract preview (current = 100,000)", pv?.status === 200 && Math.abs(Number(pv.data.currentGross) - 100000) < 0.01, pv?.json);
   check("contracts with a pending extract refuse a second one (business rule)", blocked >= 0);
 
+
+  // ── company onboarding (COA + cash box auto-setup), then delete ──
+  const code = "T" + Date.now().toString().slice(-6);
+  const co = await call("POST", "/api/companies", { cookie: admin, body: { code, name: "شركة اختبار الدخان", servicePackage: "BASIC" } });
+  check("create company", co.status === 201, co.json);
+  const coAcc = await call("GET", `/api/lookups/accounts?companyId=${co.data.id}`, { cookie: admin });
+  check("new company has its own chart of accounts", coAcc.status === 200 && coAcc.data.length > 30, coAcc.data?.length);
+  check("acc.nile cannot see new company (403/404)", [403, 404].includes((await call("GET", `/api/companies/${co.data.id}`, { cookie: S["acc.nile"] })).status));
+  check("delete empty company", (await call("DELETE", `/api/companies/${co.data.id}`, { cookie: admin })).status === 200);
+
+  // ── procurement chain ──
+  const supp = (await call("GET", `/api/lookups/suppliers?companyId=${C.NILE}`, { cookie: S.procurement })).data as any[];
+  const pr = await call("POST", "/api/purchase-requests", { cookie: S.procurement, body: { companyId: C.NILE, date: "2026-09-20", requestedBy: "م. الموقع", items: [{ description: "أسمنت بورتلاندي", unit: "طن", quantity: 10 }, { description: "حديد تسليح", unit: "طن", quantity: 2 }] } });
+  check("create purchase request", pr.status === 201, pr.json);
+  const prItems = (await call("GET", `/api/purchase-requests/${pr.data.id}`, { cookie: S.procurement })).data.items;
+  const q1 = await call("POST", "/api/quotations", { cookie: S.procurement, body: { companyId: C.NILE, requestId: pr.data.id, supplierId: supp[0].id, date: "2026-09-21", items: prItems.map((i: any) => ({ requestItemId: i.id, description: i.description, quantity: i.quantity, unitPrice: i.description.includes("أسمنت") ? 2500 : 38000 })) } });
+  const q2 = await call("POST", "/api/quotations", { cookie: S.procurement, body: { companyId: C.NILE, requestId: pr.data.id, supplierId: supp[1].id, date: "2026-09-21", items: prItems.map((i: any) => ({ requestItemId: i.id, description: i.description, quantity: i.quantity, unitPrice: i.description.includes("أسمنت") ? 2400 : 39000 })) } });
+  check("two quotations", q1.status === 201 && q2.status === 201, [q1.json, q2.json]);
+  const cmp = await call("GET", `/api/procurement/comparison?requestId=${pr.data.id}`, { cookie: S.procurement });
+  check("comparison picks lowest total", cmp.status === 200 && cmp.data.lowestQuotationId === q1.data.id /* 101,000 < 102,000 */, cmp.data?.quotations);
+  const po = await call("POST", `/api/quotations/${q2.data.id}/create-order`, { cookie: S.procurement });
+  check("create PO from quotation", po.status === 200 && Number(po.data.total) === Math.round((24000 + 78000) * 1.14 * 100) / 100, po.json);
+  check("submit PO", (await call("POST", `/api/purchase-orders/${po.data.id}/submit`, { cookie: S.procurement })).status === 200);
+  check("CFO approves PO", (await call("POST", `/api/purchase-orders/${po.data.id}/approve`, { cookie: S.cfo })).status === 200);
+  check("CFO posts (issues) PO", (await call("POST", `/api/purchase-orders/${po.data.id}/post`, { cookie: S.cfo })).status === 200);
+  const poFull = (await call("GET", `/api/purchase-orders/${po.data.id}`, { cookie: S.procurement })).data;
+  const over = await call("POST", "/api/goods-receipts", { cookie: S.procurement, body: { companyId: C.NILE, orderId: po.data.id, date: "2026-09-25", items: [{ orderItemId: poFull.items[0].id, quantity: 999 }] } });
+  check("over-receiving rejected (422)", over.status === 422, over.status);
+  const grn = await call("POST", "/api/goods-receipts", { cookie: S.procurement, body: { companyId: C.NILE, orderId: po.data.id, date: "2026-09-25", items: poFull.items.map((i: any) => ({ orderItemId: i.id, quantity: i.quantity })) } });
+  check("goods receipt (full) marks PO received", grn.status === 201 && (await call("GET", `/api/purchase-orders/${po.data.id}`, { cookie: S.procurement })).data.received === true, grn.json);
+
+  // ── payroll generation ──
+  const pay = await call("POST", "/api/payrolls", { cookie: S.hr, body: { companyId: C.UNITED, month: "2026-11" } });
+  check("generate payroll run", pay.status === 201 && Number(pay.data.totalNet) > 0, pay.json);
+  const payFull = (await call("GET", `/api/payrolls/${pay.data.id}`, { cookie: S.hr })).data;
+  check("payroll lines net = gross - deductions", payFull.lines.length > 0 && payFull.lines.every((l: any) => Math.abs(Number(l.gross) - Number(l.insurance) - Number(l.tax) - Number(l.deductions) - Number(l.net)) < 0.02), payFull.lines[0]);
+  check("delete draft payroll", (await call("DELETE", `/api/payrolls/${pay.data.id}`, { cookie: admin })).status === 200);
+
+  // ── documents ──
+  const fd = new FormData();
+  fd.set("companyId", C.NILE);
+  fd.set("title", "مستند اختبار");
+  fd.set("file", new Blob(["hello ccs"], { type: "text/plain" }), "smoke.txt");
+  const up = await fetch(BASE + "/api/documents", { method: "POST", headers: { cookie: S["acc.nile"] }, body: fd });
+  const upj: any = await up.json();
+  check("upload document", up.status === 201, upj);
+  const dl = await fetch(BASE + `/api/documents/${upj.data?.id}`, { headers: { cookie: S["acc.nile"] } });
+  check("download document", dl.status === 200 && (await dl.text()) === "hello ccs");
+  check("other-company user cannot download -> 404", (await fetch(BASE + `/api/documents/${upj.data?.id}`, { headers: { cookie: S["acc.modern"] } })).status === 404);
+  check("delete document (cfo)", (await call("DELETE", `/api/documents/${upj.data?.id}`, { cookie: S.cfo })).status === 200);
+
+  // ── bank reconciliation ──
+  const bank = (await call("GET", `/api/lookups/bank-accounts?companyId=${C.NILE}`, { cookie: S.treasury })).data[0];
+  const prev = await call("GET", `/api/bank-reconciliation?bankAccountId=${bank.id}&statementDate=2026-12-31`, { cookie: S.treasury });
+  check("bank reconciliation preview", prev.status === 200 && typeof prev.data.bookBalance === "number");
+  const recBody = { bankAccountId: bank.id, statementDate: "2026-12-31", statementBalance: prev.data.bookBalance, lineIds: prev.data.uncleared.map((l: any) => l.id) };
+  const rec = await call("POST", "/api/bank-reconciliation", { cookie: S.treasury, body: recBody });
+  check("bank reconciliation save: difference 0 when all cleared", rec.status === 201 && Math.abs(Number(rec.data.difference)) < 0.01, rec.json);
+
   check("logout", (await call("POST", "/api/auth/logout", { cookie: S.viewer })).status === 200);
   check("session invalid after logout -> 401", (await call("GET", "/api/auth/me", { cookie: S.viewer })).status === 401);
 
