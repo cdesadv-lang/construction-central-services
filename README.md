@@ -321,7 +321,7 @@ npm run db:migrate && npm run build
 ## 10. الاختبارات / Testing
 
 * `npm test` — 32 vitest tests: double-entry validation, posting & ledger effect, trial balance / balance sheet balance, reversal, tenant isolation (company A cannot read/write company B: 404/403), project-level restriction, RBAC, approval workflow (step roles, no self-approval, reject/resubmit), contractor/client extract calculations and posting lines, payment limits, contractor statement.
-* `npm run smoke` — 137 HTTP checks against a running server: logins for all 14 users, every page and list endpoint, all reports, trial-balance balance, CSV, tenant isolation & project restriction, RBAC denials, CSRF, CRUD round-trip, full journal workflow (accountant → chief → CFO → post → reverse), audit trail, extract preview, logout.
+* `npm run smoke` — 159 HTTP checks against a running server: logins for all 14 users, every page and list endpoint, all reports, trial-balance balance, CSV, tenant isolation & project restriction, RBAC denials, CSRF, CRUD round-trip, full journal workflow (accountant → chief → CFO → post → reverse), audit trail, extract preview, company onboarding, procurement chain (PR → quotations → comparison → PO → approval → goods receipt, over-receipt guard), payroll generation, document upload/download isolation, bank reconciliation, logout. **It writes data — run `npm run db:seed` afterwards for a clean demo.**
 * `npm run build` — production build with type checking and lint.
 
 ## 11. Known limitations
