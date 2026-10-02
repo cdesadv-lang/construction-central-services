@@ -1,0 +1,1263 @@
+// Construction Central Services — multi-company ERP schema
+// Every tenant record carries companyId (FK -> Company) and is scoped server-side.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────────── Enums ─────────────────────────────
+enum Role {
+  SUPER_ADMIN
+  GENERAL_MANAGER
+  FINANCE_MANAGER
+  CHIEF_ACCOUNTANT
+  ACCOUNTANT
+  COST_ACCOUNTANT
+  EXTRACT_ACCOUNTANT
+  TREASURY_ACCOUNTANT
+  PROCUREMENT_OFFICER
+  HR_OFFICER
+  FINANCIAL_CONTROLLER
+  VIEWER
+}
+
+enum CompanyStatus {
+  ACTIVE
+  SUSPENDED
+  INACTIVE
+}
+
+enum ServicePackage {
+  BASIC
+  STANDARD
+  PREMIUM
+}
+
+enum ProjectStatus {
+  PLANNING
+  ACTIVE
+  SUSPENDED
+  COMPLETED
+  CLOSED
+}
+
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
+enum DocStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  POSTED
+  CANCELLED
+}
+
+enum CostCategory {
+  MATERIALS
+  LABOR
+  EQUIPMENT
+  SUBCONTRACTORS
+  TRANSPORT
+  OTHER
+}
+
+enum ExpenseType {
+  MATERIALS
+  LABOR
+  EQUIPMENT
+  TRANSPORT
+  FUEL
+  RENT
+  CONTRACTORS
+  ADMIN
+  OTHER
+}
+
+enum PaymentMethod {
+  CASH
+  BANK
+  CHEQUE
+  CUSTODY
+  CREDIT
+}
+
+enum PaymentType {
+  SUPPLIER_PAYMENT
+  CONTRACTOR_PAYMENT
+  CONTRACTOR_ADVANCE
+  CLIENT_RECEIPT
+}
+
+enum TreasuryKind {
+  CASH_RECEIPT
+  CASH_PAYMENT
+  CASH_TRANSFER
+  BANK_DEPOSIT
+  BANK_WITHDRAWAL
+  BANK_TRANSFER
+  BANK_RECEIPT
+  BANK_PAYMENT
+}
+
+enum ChequeType {
+  ISSUED
+  RECEIVED
+}
+
+enum ChequeStatus {
+  PENDING
+  CLEARED
+  BOUNCED
+  CANCELLED
+}
+
+enum CustodyStatus {
+  OPEN
+  SETTLED
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  ON_LEAVE
+  TERMINATED
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  LEAVE
+}
+
+enum LeaveType {
+  ANNUAL
+  SICK
+  UNPAID
+  EMERGENCY
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum HrAdjustmentType {
+  OVERTIME
+  BONUS
+  DEDUCTION
+}
+
+enum PRStatus {
+  DRAFT
+  SUBMITTED
+  QUOTING
+  ORDERED
+  CLOSED
+  CANCELLED
+}
+
+// ───────────────────────── Identity & access ─────────────────────────
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String
+  nameEn       String?
+  passwordHash String
+  role         Role
+  allCompanies Boolean   @default(false)
+  isActive     Boolean   @default(true)
+  lang         String    @default("ar")
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  sessions      Session[]
+  companies     UserCompany[]
+  projects      UserProject[]
+  notifications Notification[]
+  auditLogs     AuditLog[]
+  approvalActs  ApprovalAction[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model RolePermission {
+  id     String @id @default(cuid())
+  role   Role
+  module String
+  action String
+
+  @@unique([role, module, action])
+}
+
+model UserCompany {
+  userId    String
+  companyId String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@id([userId, companyId])
+}
+
+model UserProject {
+  userId    String
+  projectId String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@id([userId, projectId])
+}
+
+// ───────────────────────── Companies & projects ─────────────────────────
+model Company {
+  id                 String         @id @default(cuid())
+  code               String         @unique
+  name               String
+  nameEn             String?
+  commercialRegister String?
+  taxNumber          String?
+  address            String?
+  phone              String?
+  email              String?
+  contactPerson      String?
+  contractStart      DateTime?
+  contractEnd        DateTime?
+  servicePackage     ServicePackage @default(STANDARD)
+  status             CompanyStatus  @default(ACTIVE)
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  users              UserCompany[]
+  projects           Project[]
+  clients            Client[]
+  accounts           Account[]
+  costCenters        CostCenter[]
+  journalEntries     JournalEntry[]
+  journalLines       JournalLine[]
+  sequences          Sequence[]
+  suppliers          Supplier[]
+  supplierInvoices   SupplierInvoice[]
+  contractors        Contractor[]
+  subContracts       SubContract[]
+  contractorExtracts ContractorExtract[]
+  clientExtracts     ClientExtract[]
+  cashBoxes          CashBox[]
+  bankAccounts       BankAccount[]
+  payments           Payment[]
+  treasuryTxs        TreasuryTransaction[]
+  cheques            Cheque[]
+  bankRecs           BankReconciliation[]
+  expenses           Expense[]
+  custodies          Custody[]
+  purchaseRequests   PurchaseRequest[]
+  quotations         Quotation[]
+  purchaseOrders     PurchaseOrder[]
+  goodsReceipts      GoodsReceipt[]
+  departments        Department[]
+  positions          Position[]
+  employees          Employee[]
+  payrolls           Payroll[]
+  documents          Document[]
+  approvalRequests   ApprovalRequest[]
+  workflows          ApprovalWorkflow[]
+  budgets            ProjectBudget[]
+}
+
+model Client {
+  id            String   @id @default(cuid())
+  companyId     String
+  company       Company  @relation(fields: [companyId], references: [id])
+  code          String
+  name          String
+  taxNumber     String?
+  contactPerson String?
+  phone         String?
+  email         String?
+  address       String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  projects       Project[]
+  clientExtracts ClientExtract[]
+  payments       Payment[]
+
+  @@unique([companyId, code])
+}
+
+model Project {
+  id                 String        @id @default(cuid())
+  companyId          String
+  company            Company       @relation(fields: [companyId], references: [id])
+  code               String
+  name               String
+  clientId           String?
+  client             Client?       @relation(fields: [clientId], references: [id])
+  contractValue      Decimal       @default(0) @db.Decimal(18, 2)
+  startDate          DateTime?
+  endDate            DateTime?
+  projectManager     String?
+  consultant         String?
+  location           String?
+  budget             Decimal       @default(0) @db.Decimal(18, 2)
+  completionPct      Decimal       @default(0) @db.Decimal(5, 2)
+  clientRetentionPct Decimal       @default(5) @db.Decimal(5, 2)
+  clientTaxPct       Decimal       @default(1) @db.Decimal(5, 2)
+  clientInsurancePct Decimal       @default(0) @db.Decimal(5, 2)
+  status             ProjectStatus @default(PLANNING)
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  users              UserProject[]
+  budgets            ProjectBudget[]
+  costCenters        CostCenter[]
+  accounts           Account[]
+  contracts          SubContract[]
+  clientExtracts     ClientExtract[]
+  contractorExtracts ContractorExtract[]
+  journalEntries     JournalEntry[]
+  journalLines       JournalLine[]
+  expenses           Expense[]
+  supplierInvoices   SupplierInvoice[]
+  payments           Payment[]
+  treasuryTxs        TreasuryTransaction[]
+  custodies          Custody[]
+  purchaseRequests   PurchaseRequest[]
+  purchaseOrders     PurchaseOrder[]
+  employees          Employee[]
+  allocations        EmployeeAllocation[]
+  payrolls           Payroll[]
+
+  @@unique([companyId, code])
+  @@index([companyId])
+}
+
+model ProjectBudget {
+  id        String       @id @default(cuid())
+  companyId String
+  company   Company      @relation(fields: [companyId], references: [id])
+  projectId String
+  project   Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  category  CostCategory
+  amount    Decimal      @default(0) @db.Decimal(18, 2)
+  notes     String?
+
+  @@unique([projectId, category])
+}
+
+// ───────────────────────── Accounting core ─────────────────────────
+model Account {
+  id           String        @id @default(cuid())
+  companyId    String
+  company      Company       @relation(fields: [companyId], references: [id])
+  code         String
+  name         String
+  nameEn       String?
+  type         AccountType
+  parentId     String?
+  parent       Account?      @relation("AccountTree", fields: [parentId], references: [id])
+  children     Account[]     @relation("AccountTree")
+  isPostable   Boolean       @default(true)
+  systemKey    String?
+  costCategory CostCategory?
+  projectId    String?
+  project      Project?      @relation(fields: [projectId], references: [id])
+  isActive     Boolean       @default(true)
+  createdAt    DateTime      @default(now())
+
+  lines        JournalLine[]
+  cashBox      CashBox?
+  bankAccount  BankAccount?
+
+  @@unique([companyId, code])
+  @@unique([companyId, systemKey])
+  @@index([companyId])
+}
+
+model CostCenter {
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id])
+  code      String
+  name      String
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id])
+  createdAt DateTime @default(now())
+
+  lines    JournalLine[]
+  expenses Expense[]
+
+  @@unique([companyId, code])
+}
+
+model JournalEntry {
+  id           String        @id @default(cuid())
+  companyId    String
+  company      Company       @relation(fields: [companyId], references: [id])
+  number       String
+  date         DateTime
+  projectId    String?
+  project      Project?      @relation(fields: [projectId], references: [id])
+  description  String
+  status       DocStatus     @default(DRAFT)
+  sourceType   String?
+  sourceId     String?
+  reversalOfId String?
+  totalDebit   Decimal       @default(0) @db.Decimal(18, 2)
+  totalCredit  Decimal       @default(0) @db.Decimal(18, 2)
+  createdById  String?
+  approvedById String?
+  postedById   String?
+  postedAt     DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  lines JournalLine[]
+
+  @@unique([companyId, number])
+  @@index([companyId, status])
+  @@index([sourceType, sourceId])
+}
+
+model JournalLine {
+  id               String       @id @default(cuid())
+  companyId        String
+  company          Company      @relation(fields: [companyId], references: [id])
+  entryId          String
+  entry            JournalEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  accountId        String
+  account          Account      @relation(fields: [accountId], references: [id])
+  debit            Decimal      @default(0) @db.Decimal(18, 2)
+  credit           Decimal      @default(0) @db.Decimal(18, 2)
+  costCenterId     String?
+  costCenter       CostCenter?  @relation(fields: [costCenterId], references: [id])
+  projectId        String?
+  project          Project?     @relation(fields: [projectId], references: [id])
+  description      String?
+  partyType        String?
+  partyId          String?
+  reconciledAt     DateTime?
+  reconciliationId String?
+
+  @@index([companyId, accountId])
+  @@index([projectId])
+  @@index([partyType, partyId])
+}
+
+model Sequence {
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id])
+  key       String
+  value     Int     @default(0)
+
+  @@id([companyId, key])
+}
+
+// ───────────────────────── Approval workflow ─────────────────────────
+model ApprovalWorkflow {
+  id        String         @id @default(cuid())
+  companyId String?
+  company   Company?       @relation(fields: [companyId], references: [id])
+  docType   String
+  name      String
+  isActive  Boolean        @default(true)
+  steps     ApprovalStep[]
+  createdAt DateTime       @default(now())
+
+  @@unique([companyId, docType])
+}
+
+model ApprovalStep {
+  id         String           @id @default(cuid())
+  workflowId String
+  workflow   ApprovalWorkflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  order      Int
+  name       String
+  role       Role
+
+  @@unique([workflowId, order])
+}
+
+model ApprovalRequest {
+  id          String           @id @default(cuid())
+  companyId   String
+  company     Company          @relation(fields: [companyId], references: [id])
+  docType     String
+  docId       String
+  docNumber   String?
+  workflowId  String?
+  steps       Json
+  currentStep Int              @default(1)
+  totalSteps  Int
+  status      ApprovalStatus   @default(PENDING)
+  submittedBy String
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  actions     ApprovalAction[]
+
+  @@index([companyId, status])
+  @@index([docType, docId])
+}
+
+model ApprovalAction {
+  id        String          @id @default(cuid())
+  requestId String
+  request   ApprovalRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  stepOrder Int
+  userId    String
+  user      User            @relation(fields: [userId], references: [id])
+  action    String
+  comment   String?
+  createdAt DateTime        @default(now())
+}
+
+// ───────────────────────── Suppliers ─────────────────────────
+model Supplier {
+  id               String   @id @default(cuid())
+  companyId        String
+  company          Company  @relation(fields: [companyId], references: [id])
+  code             String
+  name             String
+  taxNumber        String?
+  contactPerson    String?
+  phone            String?
+  email            String?
+  address          String?
+  paymentTermsDays Int      @default(30)
+  bankName         String?
+  bankAccount      String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  invoices       SupplierInvoice[]
+  payments       Payment[]
+  expenses       Expense[]
+  quotations     Quotation[]
+  purchaseOrders PurchaseOrder[]
+
+  @@unique([companyId, code])
+}
+
+model SupplierInvoice {
+  id              String         @id @default(cuid())
+  companyId       String
+  company         Company        @relation(fields: [companyId], references: [id])
+  number          String
+  supplierRef     String?
+  supplierId      String
+  supplier        Supplier       @relation(fields: [supplierId], references: [id])
+  projectId       String?
+  project         Project?       @relation(fields: [projectId], references: [id])
+  purchaseOrderId String?
+  purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+  date            DateTime
+  dueDate         DateTime?
+  category        ExpenseType    @default(MATERIALS)
+  description     String?
+  subtotal        Decimal        @default(0) @db.Decimal(18, 2)
+  taxAmount       Decimal        @default(0) @db.Decimal(18, 2)
+  total           Decimal        @default(0) @db.Decimal(18, 2)
+  paidAmount      Decimal        @default(0) @db.Decimal(18, 2)
+  status          DocStatus      @default(DRAFT)
+  journalEntryId  String?
+  createdById     String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  payments Payment[]
+
+  @@unique([companyId, number])
+}
+
+// ───────────────────────── Contractors ─────────────────────────
+model Contractor {
+  id            String   @id @default(cuid())
+  companyId     String
+  company       Company  @relation(fields: [companyId], references: [id])
+  code          String
+  name          String
+  specialty     String?
+  taxNumber     String?
+  contactPerson String?
+  phone         String?
+  address       String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  contracts SubContract[]
+  extracts  ContractorExtract[]
+  payments  Payment[]
+
+  @@unique([companyId, code])
+}
+
+model SubContract {
+  id                 String     @id @default(cuid())
+  companyId          String
+  company            Company    @relation(fields: [companyId], references: [id])
+  number             String
+  contractorId       String
+  contractor         Contractor @relation(fields: [contractorId], references: [id])
+  projectId          String
+  project            Project    @relation(fields: [projectId], references: [id])
+  scope              String
+  contractValue      Decimal    @default(0) @db.Decimal(18, 2)
+  retentionPct       Decimal    @default(5) @db.Decimal(5, 2)
+  taxPct             Decimal    @default(1) @db.Decimal(5, 2)
+  insurancePct       Decimal    @default(0) @db.Decimal(5, 2)
+  advanceRecoveryPct Decimal    @default(0) @db.Decimal(5, 2)
+  startDate          DateTime?
+  endDate            DateTime?
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  extracts ContractorExtract[]
+
+  @@unique([companyId, number])
+}
+
+model ContractorExtract {
+  id              String      @id @default(cuid())
+  companyId       String
+  company         Company     @relation(fields: [companyId], references: [id])
+  number          String
+  contractId      String
+  contract        SubContract @relation(fields: [contractId], references: [id])
+  contractorId    String
+  contractor      Contractor  @relation(fields: [contractorId], references: [id])
+  projectId       String
+  project         Project     @relation(fields: [projectId], references: [id])
+  periodFrom      DateTime
+  periodTo        DateTime
+  date            DateTime
+  cumulativeGross Decimal     @default(0) @db.Decimal(18, 2)
+  previousGross   Decimal     @default(0) @db.Decimal(18, 2)
+  currentGross    Decimal     @default(0) @db.Decimal(18, 2)
+  retentionAmount Decimal     @default(0) @db.Decimal(18, 2)
+  advanceRecovery Decimal     @default(0) @db.Decimal(18, 2)
+  taxAmount       Decimal     @default(0) @db.Decimal(18, 2)
+  insuranceAmount Decimal     @default(0) @db.Decimal(18, 2)
+  otherDeductions Decimal     @default(0) @db.Decimal(18, 2)
+  netAmount       Decimal     @default(0) @db.Decimal(18, 2)
+  paidAmount      Decimal     @default(0) @db.Decimal(18, 2)
+  description     String?
+  status          DocStatus   @default(DRAFT)
+  journalEntryId  String?
+  createdById     String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  payments Payment[]
+
+  @@unique([companyId, number])
+}
+
+model ClientExtract {
+  id              String    @id @default(cuid())
+  companyId       String
+  company         Company   @relation(fields: [companyId], references: [id])
+  number          String
+  projectId       String
+  project         Project   @relation(fields: [projectId], references: [id])
+  clientId        String
+  client          Client    @relation(fields: [clientId], references: [id])
+  periodFrom      DateTime
+  periodTo        DateTime
+  date            DateTime
+  cumulativeWork  Decimal   @default(0) @db.Decimal(18, 2)
+  previousWork    Decimal   @default(0) @db.Decimal(18, 2)
+  workValue       Decimal   @default(0) @db.Decimal(18, 2)
+  retentionAmount Decimal   @default(0) @db.Decimal(18, 2)
+  otherDeductions Decimal   @default(0) @db.Decimal(18, 2)
+  taxAmount       Decimal   @default(0) @db.Decimal(18, 2)
+  insuranceAmount Decimal   @default(0) @db.Decimal(18, 2)
+  netAmount       Decimal   @default(0) @db.Decimal(18, 2)
+  paidAmount      Decimal   @default(0) @db.Decimal(18, 2)
+  description     String?
+  status          DocStatus @default(DRAFT)
+  journalEntryId  String?
+  createdById     String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  payments Payment[]
+
+  @@unique([companyId, number])
+}
+
+// ───────────────────────── Treasury & banks ─────────────────────────
+model CashBox {
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id])
+  code      String
+  name      String
+  keeper    String?
+  accountId String   @unique
+  account   Account  @relation(fields: [accountId], references: [id])
+  createdAt DateTime @default(now())
+
+  payments  Payment[]
+  expenses  Expense[]
+  custodies Custody[]
+
+  @@unique([companyId, code])
+}
+
+model BankAccount {
+  id            String   @id @default(cuid())
+  companyId     String
+  company       Company  @relation(fields: [companyId], references: [id])
+  code          String
+  bankName      String
+  branch        String?
+  accountNumber String
+  iban          String?
+  currency      String   @default("EGP")
+  accountId     String   @unique
+  account       Account  @relation(fields: [accountId], references: [id])
+  createdAt     DateTime @default(now())
+
+  cheques         Cheque[]
+  reconciliations BankReconciliation[]
+  payments        Payment[]
+  expenses        Expense[]
+
+  @@unique([companyId, code])
+}
+
+model Payment {
+  id                  String             @id @default(cuid())
+  companyId           String
+  company             Company            @relation(fields: [companyId], references: [id])
+  number              String
+  type                PaymentType
+  date                DateTime
+  amount              Decimal            @db.Decimal(18, 2)
+  method              PaymentMethod
+  cashBoxId           String?
+  cashBox             CashBox?           @relation(fields: [cashBoxId], references: [id])
+  bankAccountId       String?
+  bankAccount         BankAccount?       @relation(fields: [bankAccountId], references: [id])
+  chequeNumber        String?
+  chequeDueDate       DateTime?
+  projectId           String?
+  project             Project?           @relation(fields: [projectId], references: [id])
+  supplierId          String?
+  supplier            Supplier?          @relation(fields: [supplierId], references: [id])
+  supplierInvoiceId   String?
+  supplierInvoice     SupplierInvoice?   @relation(fields: [supplierInvoiceId], references: [id])
+  contractorId        String?
+  contractor          Contractor?        @relation(fields: [contractorId], references: [id])
+  contractorExtractId String?
+  contractorExtract   ContractorExtract? @relation(fields: [contractorExtractId], references: [id])
+  clientId            String?
+  client              Client?            @relation(fields: [clientId], references: [id])
+  clientExtractId     String?
+  clientExtract       ClientExtract?     @relation(fields: [clientExtractId], references: [id])
+  description         String?
+  status              DocStatus          @default(DRAFT)
+  journalEntryId      String?
+  createdById         String?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  @@unique([companyId, number])
+}
+
+model TreasuryTransaction {
+  id               String       @id @default(cuid())
+  companyId        String
+  company          Company      @relation(fields: [companyId], references: [id])
+  number           String
+  kind             TreasuryKind
+  date             DateTime
+  amount           Decimal      @db.Decimal(18, 2)
+  cashBoxId        String?
+  toCashBoxId      String?
+  bankAccountId    String?
+  toBankAccountId  String?
+  counterAccountId String?
+  projectId        String?
+  project          Project?     @relation(fields: [projectId], references: [id])
+  description      String?
+  status           DocStatus    @default(DRAFT)
+  journalEntryId   String?
+  createdById      String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@unique([companyId, number])
+}
+
+model Cheque {
+  id            String       @id @default(cuid())
+  companyId     String
+  company       Company      @relation(fields: [companyId], references: [id])
+  number        String
+  type          ChequeType
+  bankAccountId String
+  bankAccount   BankAccount  @relation(fields: [bankAccountId], references: [id])
+  amount        Decimal      @db.Decimal(18, 2)
+  issueDate     DateTime
+  dueDate       DateTime
+  partyName     String
+  paymentId     String?
+  status        ChequeStatus @default(PENDING)
+  notes         String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@unique([companyId, bankAccountId, number])
+}
+
+model BankReconciliation {
+  id               String      @id @default(cuid())
+  companyId        String
+  company          Company     @relation(fields: [companyId], references: [id])
+  bankAccountId    String
+  bankAccount      BankAccount @relation(fields: [bankAccountId], references: [id])
+  statementDate    DateTime
+  statementBalance Decimal     @db.Decimal(18, 2)
+  bookBalance      Decimal     @db.Decimal(18, 2)
+  clearedBalance   Decimal     @db.Decimal(18, 2)
+  difference       Decimal     @db.Decimal(18, 2)
+  notes            String?
+  createdById      String?
+  createdAt        DateTime    @default(now())
+}
+
+// ───────────────────────── Expenses & custody ─────────────────────────
+model Expense {
+  id             String        @id @default(cuid())
+  companyId      String
+  company        Company       @relation(fields: [companyId], references: [id])
+  number         String
+  projectId      String?
+  project        Project?      @relation(fields: [projectId], references: [id])
+  type           ExpenseType
+  date           DateTime
+  amount         Decimal       @db.Decimal(18, 2)
+  paymentMethod  PaymentMethod
+  cashBoxId      String?
+  cashBox        CashBox?      @relation(fields: [cashBoxId], references: [id])
+  bankAccountId  String?
+  bankAccount    BankAccount?  @relation(fields: [bankAccountId], references: [id])
+  supplierId     String?
+  supplier       Supplier?     @relation(fields: [supplierId], references: [id])
+  employeeId     String?
+  employee       Employee?     @relation(fields: [employeeId], references: [id])
+  custodyId      String?
+  custody        Custody?      @relation(fields: [custodyId], references: [id])
+  costCenterId   String?
+  costCenter     CostCenter?   @relation(fields: [costCenterId], references: [id])
+  documentId     String?
+  description    String?
+  status         DocStatus     @default(DRAFT)
+  journalEntryId String?
+  createdById    String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@unique([companyId, number])
+}
+
+model Custody {
+  id                String        @id @default(cuid())
+  companyId         String
+  company           Company       @relation(fields: [companyId], references: [id])
+  number            String
+  employeeId        String
+  employee          Employee      @relation(fields: [employeeId], references: [id])
+  amount            Decimal       @db.Decimal(18, 2)
+  date              DateTime
+  purpose           String
+  cashBoxId         String
+  cashBox           CashBox       @relation(fields: [cashBoxId], references: [id])
+  projectId         String?
+  project           Project?      @relation(fields: [projectId], references: [id])
+  status            DocStatus     @default(DRAFT)
+  settlementStatus  CustodyStatus @default(OPEN)
+  returnedAmount    Decimal       @default(0) @db.Decimal(18, 2)
+  settledAt         DateTime?
+  journalEntryId    String?
+  settlementEntryId String?
+  createdById       String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  expenses Expense[]
+
+  @@unique([companyId, number])
+}
+
+// ───────────────────────── Procurement ─────────────────────────
+model PurchaseRequest {
+  id          String                @id @default(cuid())
+  companyId   String
+  company     Company               @relation(fields: [companyId], references: [id])
+  number      String
+  projectId   String?
+  project     Project?              @relation(fields: [projectId], references: [id])
+  date        DateTime
+  requestedBy String?
+  notes       String?
+  status      PRStatus              @default(DRAFT)
+  createdById String?
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+  items       PurchaseRequestItem[]
+  quotations  Quotation[]
+  orders      PurchaseOrder[]
+
+  @@unique([companyId, number])
+}
+
+model PurchaseRequestItem {
+  id          String          @id @default(cuid())
+  requestId   String
+  request     PurchaseRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  description String
+  unit        String          @default("unit")
+  quantity    Decimal         @db.Decimal(18, 3)
+}
+
+model Quotation {
+  id           String          @id @default(cuid())
+  companyId    String
+  company      Company         @relation(fields: [companyId], references: [id])
+  number       String
+  requestId    String
+  request      PurchaseRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  supplierId   String
+  supplier     Supplier        @relation(fields: [supplierId], references: [id])
+  date         DateTime
+  validUntil   DateTime?
+  deliveryDays Int?
+  total        Decimal         @default(0) @db.Decimal(18, 2)
+  notes        String?
+  selected     Boolean         @default(false)
+  items        QuotationItem[]
+  createdAt    DateTime        @default(now())
+
+  @@unique([companyId, number])
+}
+
+model QuotationItem {
+  id            String    @id @default(cuid())
+  quotationId   String
+  quotation     Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  requestItemId String?
+  description   String
+  quantity      Decimal   @db.Decimal(18, 3)
+  unitPrice     Decimal   @db.Decimal(18, 2)
+  total         Decimal   @db.Decimal(18, 2)
+}
+
+model PurchaseOrder {
+  id          String              @id @default(cuid())
+  companyId   String
+  company     Company             @relation(fields: [companyId], references: [id])
+  number      String
+  requestId   String?
+  request     PurchaseRequest?    @relation(fields: [requestId], references: [id])
+  quotationId String?
+  supplierId  String
+  supplier    Supplier            @relation(fields: [supplierId], references: [id])
+  projectId   String?
+  project     Project?            @relation(fields: [projectId], references: [id])
+  date        DateTime
+  subtotal    Decimal             @default(0) @db.Decimal(18, 2)
+  taxPct      Decimal             @default(14) @db.Decimal(5, 2)
+  taxAmount   Decimal             @default(0) @db.Decimal(18, 2)
+  total       Decimal             @default(0) @db.Decimal(18, 2)
+  status      DocStatus           @default(DRAFT)
+  received    Boolean             @default(false)
+  notes       String?
+  createdById String?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  items       PurchaseOrderItem[]
+  receipts    GoodsReceipt[]
+  invoices    SupplierInvoice[]
+
+  @@unique([companyId, number])
+}
+
+model PurchaseOrderItem {
+  id          String        @id @default(cuid())
+  orderId     String
+  order       PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  description String
+  unit        String        @default("unit")
+  quantity    Decimal       @db.Decimal(18, 3)
+  unitPrice   Decimal       @db.Decimal(18, 2)
+  total       Decimal       @db.Decimal(18, 2)
+  receivedQty Decimal       @default(0) @db.Decimal(18, 3)
+}
+
+model GoodsReceipt {
+  id          String             @id @default(cuid())
+  companyId   String
+  company     Company            @relation(fields: [companyId], references: [id])
+  number      String
+  orderId     String
+  order       PurchaseOrder      @relation(fields: [orderId], references: [id])
+  date        DateTime
+  notes       String?
+  createdById String?
+  createdAt   DateTime           @default(now())
+  items       GoodsReceiptItem[]
+
+  @@unique([companyId, number])
+}
+
+model GoodsReceiptItem {
+  id          String       @id @default(cuid())
+  receiptId   String
+  receipt     GoodsReceipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  orderItemId String
+  description String?
+  quantity    Decimal      @db.Decimal(18, 3)
+}
+
+// ───────────────────────── HR & payroll ─────────────────────────
+model Department {
+  id        String     @id @default(cuid())
+  companyId String
+  company   Company    @relation(fields: [companyId], references: [id])
+  code      String
+  name      String
+  employees Employee[]
+
+  @@unique([companyId, code])
+}
+
+model Position {
+  id        String     @id @default(cuid())
+  companyId String
+  company   Company    @relation(fields: [companyId], references: [id])
+  code      String
+  name      String
+  employees Employee[]
+
+  @@unique([companyId, code])
+}
+
+model Employee {
+  id              String         @id @default(cuid())
+  companyId       String
+  company         Company        @relation(fields: [companyId], references: [id])
+  code            String
+  name            String
+  nationalId      String?
+  phone           String?
+  email           String?
+  departmentId    String?
+  department      Department?    @relation(fields: [departmentId], references: [id])
+  positionId      String?
+  position        Position?      @relation(fields: [positionId], references: [id])
+  projectId       String?
+  project         Project?       @relation(fields: [projectId], references: [id])
+  hireDate        DateTime?
+  basicSalary     Decimal        @default(0) @db.Decimal(18, 2)
+  allowances      Decimal        @default(0) @db.Decimal(18, 2)
+  insuranceSalary Decimal        @default(0) @db.Decimal(18, 2)
+  bankAccount     String?
+  status          EmployeeStatus @default(ACTIVE)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  contracts   EmployeeContract[]
+  attendance  Attendance[]
+  leaves      LeaveRequest[]
+  adjustments HrAdjustment[]
+  custodies   Custody[]
+  expenses    Expense[]
+  allocations EmployeeAllocation[]
+
+  @@unique([companyId, code])
+}
+
+model EmployeeAllocation {
+  id         String   @id @default(cuid())
+  companyId  String
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  projectId  String
+  project    Project  @relation(fields: [projectId], references: [id])
+  percent    Decimal  @db.Decimal(5, 2)
+
+  @@unique([employeeId, projectId])
+}
+
+model EmployeeContract {
+  id         String    @id @default(cuid())
+  companyId  String
+  employeeId String
+  employee   Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  type       String    @default("FIXED_TERM")
+  startDate  DateTime
+  endDate    DateTime?
+  salary     Decimal   @db.Decimal(18, 2)
+  notes      String?
+  createdAt  DateTime  @default(now())
+}
+
+model Attendance {
+  id            String           @id @default(cuid())
+  companyId     String
+  employeeId    String
+  employee      Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  date          DateTime
+  status        AttendanceStatus @default(PRESENT)
+  hours         Decimal          @default(8) @db.Decimal(5, 2)
+  overtimeHours Decimal          @default(0) @db.Decimal(5, 2)
+
+  @@unique([employeeId, date])
+}
+
+model LeaveRequest {
+  id         String      @id @default(cuid())
+  companyId  String
+  employeeId String
+  employee   Employee    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  type       LeaveType
+  fromDate   DateTime
+  toDate     DateTime
+  days       Int
+  status     LeaveStatus @default(PENDING)
+  reason     String?
+  createdAt  DateTime    @default(now())
+}
+
+model HrAdjustment {
+  id         String           @id @default(cuid())
+  companyId  String
+  employeeId String
+  employee   Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  type       HrAdjustmentType
+  month      String
+  amount     Decimal          @db.Decimal(18, 2)
+  reason     String?
+  createdAt  DateTime         @default(now())
+}
+
+model Payroll {
+  id              String        @id @default(cuid())
+  companyId       String
+  company         Company       @relation(fields: [companyId], references: [id])
+  number          String
+  month           String
+  projectId       String?
+  project         Project?      @relation(fields: [projectId], references: [id])
+  totalGross      Decimal       @default(0) @db.Decimal(18, 2)
+  totalDeductions Decimal       @default(0) @db.Decimal(18, 2)
+  totalNet        Decimal       @default(0) @db.Decimal(18, 2)
+  status          DocStatus     @default(DRAFT)
+  journalEntryId  String?
+  createdById     String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  lines           PayrollLine[]
+
+  @@unique([companyId, number])
+}
+
+model PayrollLine {
+  id               String  @id @default(cuid())
+  payrollId        String
+  payroll          Payroll @relation(fields: [payrollId], references: [id], onDelete: Cascade)
+  employeeId       String
+  employeeName     String
+  basic            Decimal @db.Decimal(18, 2)
+  allowances       Decimal @db.Decimal(18, 2)
+  overtime         Decimal @db.Decimal(18, 2)
+  bonuses          Decimal @db.Decimal(18, 2)
+  deductions       Decimal @db.Decimal(18, 2)
+  insurance        Decimal @db.Decimal(18, 2)
+  companyInsurance Decimal @default(0) @db.Decimal(18, 2)
+  tax              Decimal @db.Decimal(18, 2)
+  gross            Decimal @db.Decimal(18, 2)
+  net              Decimal @db.Decimal(18, 2)
+  allocations      Json
+}
+
+// ───────────────────────── Documents, notifications, audit ─────────────────────────
+model Document {
+  id           String   @id @default(cuid())
+  companyId    String
+  company      Company  @relation(fields: [companyId], references: [id])
+  entityType   String?
+  entityId     String?
+  title        String
+  fileName     String
+  mimeType     String
+  size         Int
+  storageKey   String
+  uploadedById String?
+  createdAt    DateTime @default(now())
+
+  @@index([companyId])
+  @@index([entityType, entityId])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  companyId String?
+  type      String
+  title     String
+  body      String?
+  link      String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, read])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  action    String
+  entity    String
+  entityId  String?
+  companyId String?
+  before    Json?
+  after     Json?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([companyId, createdAt])
+  @@index([entity, entityId])
+}
