@@ -1,0 +1,53 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# New → Blueprint → pick this repo. Creates the web service and (optionally) a Render Postgres database.
+# To use Neon instead: delete the `databases` block and set DATABASE_URL (pooled) + DIRECT_URL (direct) by hand.
+services:
+  - type: web
+    name: ccs-erp
+    runtime: node
+    plan: starter
+    region: frankfurt
+    buildCommand: npm ci && npm run build:prod
+    # migrations + idempotent bootstrap run on every start (safe: advisory lock, never deletes data)
+    startCommand: npm run start:prod
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ccs-db
+          property: connectionString
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: SHOW_DEMO_ACCOUNTS
+        value: "false"
+      - key: SESSION_TTL_HOURS
+        value: "12"
+      # first admin (created once by scripts/bootstrap.ts)
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      # attachments: Render disks are only available on paid plans and pin the service to one instance —
+      # S3-compatible storage is recommended (setting S3_BUCKET selects the s3 driver)
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_REGION
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: EPHEMERAL_FS
+        value: "true"
+
+databases:
+  - name: ccs-db
+    plan: basic-256mb
+    region: frankfurt
+    postgresMajorVersion: "17"
+    databaseName: ccs
+    user: ccs

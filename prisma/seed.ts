@@ -4,6 +4,7 @@
 import { PrismaClient, type Role } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { defaultPermissions } from "../src/lib/permissions";
+import { DEFAULT_WORKFLOWS as WORKFLOWS } from "../src/server/default-workflows";
 import { setupCompanyAccounts, accountIdByKey } from "../src/server/services/accounting";
 import { buildContext, type Ctx } from "../src/server/context";
 import { createDefaultPayrollSettings, STATUTORY_SOURCE_NOTE_2025 } from "../src/server/services/payroll";
@@ -48,18 +49,6 @@ async function post(res: string, id: string, submitter: Ctx) {
   return act(ctxByRole.FINANCE_MANAGER!, res, id, "post");
 }
 
-const WORKFLOWS: { docType: string; name: string; steps: [string, Role][] }[] = [
-  { docType: "JOURNAL", name: "اعتماد القيود اليومية", steps: [["مراجعة رئيس الحسابات", "CHIEF_ACCOUNTANT"], ["اعتماد المدير المالي", "FINANCE_MANAGER"]] },
-  { docType: "EXPENSE", name: "اعتماد المصروفات", steps: [["مراجعة رئيس الحسابات", "CHIEF_ACCOUNTANT"], ["اعتماد المدير المالي", "FINANCE_MANAGER"]] },
-  { docType: "SUPPLIER_INVOICE", name: "اعتماد فواتير الموردين", steps: [["مراجعة رئيس الحسابات", "CHIEF_ACCOUNTANT"]] },
-  { docType: "PAYMENT", name: "اعتماد المدفوعات والتحصيلات", steps: [["مراجعة رئيس الحسابات", "CHIEF_ACCOUNTANT"], ["اعتماد المدير المالي", "FINANCE_MANAGER"]] },
-  { docType: "CONTRACTOR_EXTRACT", name: "اعتماد مستخلصات المقاولين", steps: [["مراجعة رئيس الحسابات", "CHIEF_ACCOUNTANT"], ["اعتماد المدير المالي", "FINANCE_MANAGER"]] },
-  { docType: "CLIENT_EXTRACT", name: "اعتماد مستخلصات العملاء", steps: [["مراجعة رئيس الحسابات", "CHIEF_ACCOUNTANT"], ["اعتماد المدير المالي", "FINANCE_MANAGER"]] },
-  { docType: "PAYROLL", name: "اعتماد مسيرات الرواتب", steps: [["اعتماد المدير المالي", "FINANCE_MANAGER"], ["اعتماد المدير العام", "GENERAL_MANAGER"]] },
-  { docType: "TREASURY", name: "اعتماد حركات الخزينة والبنوك", steps: [["اعتماد المدير المالي", "FINANCE_MANAGER"]] },
-  { docType: "CUSTODY", name: "اعتماد صرف العهد", steps: [["اعتماد المدير المالي", "FINANCE_MANAGER"]] },
-  { docType: "PURCHASE_ORDER", name: "اعتماد أوامر الشراء", steps: [["اعتماد المدير المالي", "FINANCE_MANAGER"]] },
-];
 
 interface CompanySeed {
   code: string;

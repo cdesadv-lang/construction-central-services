@@ -29,6 +29,9 @@ services:
       MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-20}
       SHOW_DEMO_ACCOUNTS: ${SHOW_DEMO_ACCOUNTS:-false}
       SEED_ON_START: ${SEED_ON_START:-false}
+      # first SUPER_ADMIN for a fresh (non-demo) install — created once by scripts/bootstrap.ts
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       LOGIN_MAX_FAILURES: ${LOGIN_MAX_FAILURES:-10}
       LOGIN_LOCK_MINUTES: ${LOGIN_LOCK_MINUTES:-15}
       # Document storage: "local" (volume below) or "s3" (any S3-compatible endpoint)
