@@ -73,6 +73,7 @@ export const COA_TEMPLATE: TplAccount[] = [
   { code: "5204", name: "خصومات العملاء", nameEn: "Client Deductions", type: "EXPENSE", parent: "52", key: "CLIENT_DEDUCTIONS_EXP" },
   { code: "5205", name: "مصروفات بنكية", nameEn: "Bank Charges", type: "EXPENSE", parent: "52", key: "BANK_CHARGES" },
   { code: "5206", name: "فروق تغيير العملة", nameEn: "Foreign Exchange Differences", type: "EXPENSE", parent: "52", key: "FX_DIFFERENCES" },
+  { code: "5207", name: "فروق عملة غير محققة (إعادة تقييم)", nameEn: "Unrealized FX Differences (Revaluation)", type: "EXPENSE", parent: "52", key: "FX_UNREALIZED" },
 ];
 
 export const EXPENSE_TYPE_ACCOUNT: Record<ExpenseType, string> = {

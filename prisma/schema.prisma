@@ -259,6 +259,7 @@ model Company {
   /// base (functional) currency of the books — only EGP is supported for posting
   baseCurrency       String         @default("EGP") @db.VarChar(3)
   exchangeRates      ExchangeRate[]
+  fxRevaluations     FxRevaluation[]
   createdAt          DateTime       @default(now())
   updatedAt          DateTime       @updatedAt
 
@@ -1466,4 +1467,37 @@ model ExchangeRate {
 
   @@unique([companyId, currency, date])
   @@index([companyId, currency, date])
+}
+
+enum FxRevaluationStatus {
+  POSTED
+  REVERSED
+}
+
+/// Period-end revaluation of open foreign-currency monetary balances at the closing rate (unrealized FX).
+/// The adjustment entry is normally auto-reversed on the next day so settlements keep realizing FX at document rates.
+model FxRevaluation {
+  id              String              @id @default(cuid())
+  companyId       String
+  company         Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  number          String
+  date            DateTime            @db.Date
+  status          FxRevaluationStatus @default(POSTED)
+  autoReverse     Boolean             @default(true)
+  /// closing rates used, e.g. {"USD": 48.2}
+  rates           Json
+  /// per-bucket detail: account, party, currency, fx balance, book value, revalued value, adjustment
+  lines           Json
+  /// net unrealized gain (+) / loss (-) in EGP
+  totalGain       Decimal             @default(0) @db.Decimal(18, 2)
+  journalEntryId  String?
+  reversalEntryId String?
+  reversalDate    DateTime?           @db.Date
+  notes           String?
+  createdById     String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@unique([companyId, number])
+  @@index([companyId, date])
 }

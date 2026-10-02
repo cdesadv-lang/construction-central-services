@@ -53,6 +53,7 @@ function Ledger() {
 export default function Page() {
   const { t, companyId } = useApp();
   const fx = useCfg("exchange-rates");
+  const reval = useCfg("fx-revaluations");
   return (
     <TabbedPage
       title={t("nav.accounting")}
@@ -63,6 +64,7 @@ export default function Page() {
         { key: "bs", label: t("r.balance-sheet"), module: "reports", render: () => <div className="card p-2"><ReportBlock report="balance-sheet" params={{ companyId }} /></div> },
         { key: "cf", label: t("r.cash-flow"), module: "reports", render: () => <div className="card p-2"><ReportBlock report="cash-flow" params={{ companyId }} /></div> },
         { key: "fx", label: t("x.exchangeRates"), module: "accounting", render: () => <ResourcePage cfg={fx} embedded /> },
+        { key: "reval", label: t("x.fxRevaluations"), module: "accounting", render: () => <ResourcePage cfg={reval} embedded /> },
       ]}
     />
   );

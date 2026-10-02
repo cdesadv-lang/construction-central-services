@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import { useApp } from "@/components/app-provider";
 import type { AnyRow, FieldDef, ResourceConfig } from "@/components/resource/types";
 import { DataTable } from "@/components/resource/table";
-import { ExtractPreview, JournalBalance, PartyStatement, ReportBlock } from "@/components/widgets";
+import { ExtractPreview, JournalBalance, PartyStatement, ReportBlock, RevaluationPreview } from "@/components/widgets";
 import { useLookup } from "@/components/resource/lookup";
 import { today } from "@/lib/client/format";
 import { CURRENCIES } from "@/lib/fx";
@@ -34,6 +34,20 @@ export function buildConfigs(t: T): Record<string, ResourceConfig> {
   const fxCol = { key: "currency", label: t("x.currency") };
   const pickCurrency = (_v: unknown, _vals: AnyRow, p?: AnyRow) => (p?.currency ? { currency: p.currency, exchangeRate: "" } : undefined);
   return {
+    "fx-revaluations": {
+      resource: "fx-revaluations", module: "accounting", title: t("x.fxRevaluations"), dateFilter: true, noEdit: true, noDelete: true, modalSize: "xl",
+      columns: [
+        { key: "number" }, { key: "date", type: "date" }, { key: "status", type: "status" }, { key: "rates", label: t("x.exchangeRate"), get: (r) => Object.entries(r.rates ?? {}).map(([c, v]) => `${c} ${v}`).join(" · ") },
+        { key: "lineCount", label: t("x.buckets"), type: "number" }, { key: "totalGain", label: t("x.unrealizedGain"), type: "money", total: true },
+        { key: "journalEntry", label: t("x.entry"), get: (r) => r.journalEntry?.number }, { key: "reversalEntry", label: t("x.reversal"), get: (r) => (r.reversalEntry ? `${r.reversalEntry.number} (${String(r.reversalDate ?? "").slice(0, 10)})` : "—") },
+      ],
+      form: [
+        { key: "date", type: "date", required: true, default: today }, { key: "autoReverse", label: t("x.autoReverse"), type: "bool", default: true }, { key: "notes", span: 3 },
+      ],
+      preview: (v, companyId) => <RevaluationPreview values={v} companyId={companyId} />,
+      rowActions: [{ key: "reverse", label: t("x.reverseRevaluation"), perm: "approve", confirm: true, show: (r) => r.status === "POSTED" }],
+      filters: [{ key: "status", type: "select", options: ["POSTED", "REVERSED"] }],
+    },
     "exchange-rates": {
       resource: "exchange-rates", module: "accounting", title: t("x.exchangeRates"), dateFilter: true,
       columns: [{ key: "date", type: "date" }, { key: "currency" }, { key: "rate", type: "number", label: t("x.rateEgp") }, { key: "source", label: t("x.source") }],

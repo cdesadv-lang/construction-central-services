@@ -669,6 +669,10 @@ async function main() {
       await post("payments", usdRcv.id, treasuryCtx);
     }
 
+    // Month-end FX revaluations of open USD balances (unrealized gain/loss), each auto-reversed on the next day
+    await create(ctxByRole.CHIEF_ACCOUNTANT!, "fx-revaluations", { ...C, date: "2026-08-31", notes: "إعادة تقييم نهاية أغسطس بسعر الإقفال" });
+    await create(ctxByRole.CHIEF_ACCOUNTANT!, "fx-revaluations", { ...C, date: "2026-09-30", notes: "إعادة تقييم نهاية سبتمبر بسعر الإقفال" });
+
     // Items awaiting approval (to populate approval inbox) and drafts
     const pendingJe = await create(acc, "journal-entries", {
       ...C, date: "2026-09-25", description: "قيد تسوية - استحقاق إيجار معدات سبتمبر", projectId: active[0].id,
@@ -721,6 +725,7 @@ async function main() {
     closedFiscalYears: await prisma.fiscalYear.count({ where: { status: "CLOSED" } }),
     exchangeRates: await prisma.exchangeRate.count(),
     fxJournalLines: await prisma.journalLine.count({ where: { currency: { not: null } } }),
+    fxRevaluations: await prisma.fxRevaluation.count(),
     projects: await prisma.project.count(),
     journalEntries: await prisma.journalEntry.count(),
     postedEntries: await prisma.journalEntry.count({ where: { status: "POSTED" } }),

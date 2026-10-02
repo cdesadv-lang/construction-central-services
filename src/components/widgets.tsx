@@ -182,3 +182,50 @@ export function JournalBalance({ lines }: { lines: AnyRow[] }) {
     </div>
   );
 }
+
+/** Live preview of an FX revaluation (open foreign-currency balances revalued at the closing rate). */
+export function RevaluationPreview({ values, companyId }: { values: AnyRow; companyId: string }) {
+  const { t } = useApp();
+  const [data, setData] = useState<AnyRow | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const date = values.date;
+  useEffect(() => {
+    if (!companyId || !date) { setData(null); return; }
+    const h = window.setTimeout(() => {
+      api
+        .get<AnyRow>(`/api/fx-revaluations/preview${qs({ companyId, date })}`)
+        .then((d) => { setData(d); setError(null); })
+        .catch((e) => { setData(null); setError(e.message); });
+    }, 300);
+    return () => window.clearTimeout(h);
+  }, [companyId, date]);
+  if (error) return <div className="mt-4"><ErrorBox error={error} /></div>;
+  if (!data) return null;
+  const lines = (data.lines ?? []) as AnyRow[];
+  return (
+    <div className="mt-4 rounded-xl border border-brand-100 bg-brand-50/60 p-4">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-sm font-bold text-brand-700">
+        <span>{t("c.preview")} — {Object.entries(data.rates ?? {}).map(([c, r]) => `${c} ${r}`).join(" · ") || "—"}</span>
+        <span className={clsx("num", Number(data.totalGain) >= 0 ? "text-emerald-700" : "text-red-700")}>{t("x.unrealizedGain")}: {fmtMoney(data.totalGain)}</span>
+      </div>
+      {lines.length === 0 ? (
+        <div className="text-sm text-slate-500">{t("x.nothingToRevalue")}</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="table text-xs">
+            <thead><tr><th>{t("f.account")}</th><th>{t("x.party")}</th><th>{t("x.currency")}</th><th>{t("x.fxBalance")}</th><th>{t("x.bookValue")}</th><th>{t("x.exchangeRate")}</th><th>{t("x.revalued")}</th><th>{t("x.adjustment")}</th></tr></thead>
+            <tbody>
+              {lines.map((l, i) => (
+                <tr key={i}>
+                  <td>{l.accountCode} {l.accountName}</td><td>{l.partyName ?? "—"}</td><td>{l.currency}</td>
+                  <td className="num">{fmtNum(l.fxBalance)}</td><td className="num">{fmtMoney(l.bookValue)}</td><td className="num">{l.rate}</td>
+                  <td className="num">{fmtMoney(l.revalued)}</td><td className={clsx("num font-bold", l.adjustment >= 0 ? "text-emerald-700" : "text-red-700")}>{fmtMoney(l.adjustment)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
