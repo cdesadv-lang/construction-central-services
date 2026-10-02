@@ -18,8 +18,8 @@ function check(name: string, ok: boolean, extra?: unknown) {
   console.log(`${ok ? "✔" : "✘"} ${name}`);
 }
 
-async function call(method: string, path: string, opts: { cookie?: string; body?: unknown; origin?: string } = {}) {
-  const headers: Record<string, string> = {};
+async function call(method: string, path: string, opts: { cookie?: string; body?: unknown; origin?: string; headers?: Record<string, string> } = {}) {
+  const headers: Record<string, string> = { ...(opts.headers ?? {}) };
   if (opts.cookie) headers.cookie = opts.cookie;
   if (opts.body !== undefined) headers["content-type"] = "application/json";
   if (opts.origin) headers.origin = opts.origin;
@@ -63,13 +63,13 @@ async function main() {
   check("4 companies visible to admin", companies.length === 4, companies.map((c) => c.code));
 
   // pages render for a logged-in user
-  for (const p of ["/dashboard", "/companies", "/projects", "/accounting", "/journal-entries", "/accounts", "/suppliers", "/contractors", "/client-extracts", "/contractor-extracts", "/expenses", "/treasury", "/banks", "/procurement", "/cost-accounting", "/hr", "/payroll", "/reports", "/documents", "/notifications", "/approvals", "/settings", "/audit-log"]) {
+  for (const p of ["/dashboard", "/companies", "/projects", "/accounting", "/journal-entries", "/accounts", "/suppliers", "/contractors", "/client-extracts", "/contractor-extracts", "/expenses", "/treasury", "/banks", "/procurement", "/cost-accounting", "/hr", "/payroll", "/reports", "/documents", "/notifications", "/approvals", "/settings", "/audit-log", "/periods"]) {
     const r = await call("GET", p, { cookie: admin });
     check(`page ${p} 200`, r.status === 200 && r.text.includes("<html"), r.status);
   }
 
   // every resource list endpoint
-  const resources = ["projects", "clients", "project-budgets", "accounts", "cost-centers", "journal-entries", "suppliers", "supplier-invoices", "contractors", "subcontracts", "contractor-extracts", "client-extracts", "expenses", "custodies", "payments", "cash-boxes", "bank-accounts", "treasury-transactions", "cheques", "bank-reconciliations", "purchase-requests", "quotations", "purchase-orders", "goods-receipts", "departments", "positions", "employees", "employee-allocations", "employee-contracts", "attendance", "leave-requests", "hr-adjustments", "payrolls"];
+  const resources = ["projects", "clients", "project-budgets", "accounts", "cost-centers", "journal-entries", "suppliers", "supplier-invoices", "contractors", "subcontracts", "contractor-extracts", "client-extracts", "expenses", "custodies", "payments", "cash-boxes", "bank-accounts", "treasury-transactions", "cheques", "bank-reconciliations", "purchase-requests", "quotations", "purchase-orders", "goods-receipts", "departments", "positions", "employees", "employee-allocations", "employee-contracts", "attendance", "leave-requests", "hr-adjustments", "payrolls", "fiscal-years", "accounting-periods", "exchange-rates"];
   for (const r of resources) {
     const res = await call("GET", `/api/${r}?pageSize=5`, { cookie: admin });
     check(`GET /api/${r}`, res.status === 200 && Array.isArray(res.data?.items), res.status);
@@ -220,6 +220,65 @@ async function main() {
   const recBody = { bankAccountId: bank.id, statementDate: "2026-12-31", statementBalance: prev.data.bookBalance, lineIds: prev.data.uncleared.map((l: any) => l.id) };
   const rec = await call("POST", "/api/bank-reconciliation", { cookie: S.treasury, body: recBody });
   check("bank reconciliation save: difference 0 when all cleared", rec.status === 201 && Math.abs(Number(rec.data.difference)) < 0.01, rec.json);
+
+  // ── accounting periods ──
+  const periods = (await call("GET", `/api/accounting-periods?companyId=${C.NILE}&pageSize=100`, { cookie: S.cfo })).data.items as any[];
+  const per = (y: number, m: number) => periods.find((p) => p.year === y && p.month === m);
+  check("periods: 2026-06 closed, 2026-07 open", per(2026, 6)?.status === "CLOSED" && per(2026, 7)?.status === "OPEN", periods.length);
+  const cashNile = (await call("GET", `/api/lookups/cash-boxes?companyId=${C.NILE}`, { cookie: S["acc.nile"] })).data[0];
+  const inClosed = await call("POST", "/api/expenses", { cookie: S["acc.nile"], body: { companyId: C.NILE, type: "OTHER", date: "2026-03-10", amount: 10, paymentMethod: "CASH", cashBoxId: cashNile.id } });
+  check("document dated in a closed period -> 422", inClosed.status === 422, inClosed.json);
+  check("accountant cannot reopen a period -> 403", (await call("POST", `/api/accounting-periods/${per(2026, 6).id}/reopen`, { cookie: S["acc.nile"], body: { reason: "smoke test" } })).status === 403);
+  const earlyClose = await call("POST", `/api/accounting-periods/${per(2026, 8).id}/close`, { cookie: S.cfo, body: {} });
+  check("closing out of order / with open checklist -> 422", earlyClose.status === 422, earlyClose.status);
+
+  // ── cheque lifecycle ──
+  const nileBanks = (await call("GET", `/api/lookups/bank-accounts?companyId=${C.NILE}`, { cookie: S.treasury })).data as any[];
+  const egpBank = nileBanks.find((b) => b.currency === "EGP");
+  const arAcc = accs.find((a: any) => a.code === "1103");
+  const chq = await call("POST", "/api/cheques", { cookie: S.treasury, body: { companyId: C.NILE, number: "SMK" + Date.now().toString().slice(-6), type: "RECEIVED", amount: 5000, issueDate: "2026-09-20", dueDate: "2026-09-25", partyName: "عميل الدخان", counterAccountId: arAcc.id } });
+  check("register received cheque (posts Notes Receivable)", chq.status === 201 && chq.data.status === "RECEIVED" && !!chq.data.journalEntryId, chq.json);
+  check("cheque: collect", (await call("POST", `/api/cheques/${chq.data.id}/collect`, { cookie: S.treasury, body: { date: "2026-09-25", bankAccountId: egpBank.id } })).data?.status === "UNDER_COLLECTION");
+  check("cheque: clear with charges", (await call("POST", `/api/cheques/${chq.data.id}/clear`, { cookie: S.treasury, body: { date: "2026-09-28", charges: 25 } })).data?.status === "CLEARED");
+  check("cheque: invalid transition -> 422", (await call("POST", `/api/cheques/${chq.data.id}/bounce`, { cookie: S.treasury, body: {} })).status === 422);
+  check("cheque: viewer cannot move cheques -> 403", (await call("POST", `/api/cheques/${chq.data.id}/represent`, { cookie: S.viewer, body: {} })).status === 403);
+  const chqFull = (await call("GET", `/api/cheques/${chq.data.id}`, { cookie: S.treasury })).data;
+  check("cheque has 3 movements with entries", chqFull.movements?.length === 3 && chqFull.movements.every((m: any) => m.journalEntryId), chqFull.movements);
+
+  // ── payroll rules ──
+  const ps = await call("GET", `/api/payroll-settings?companyId=${C.UNITED}`, { cookie: S.hr });
+  check("payroll rules: statutory defaults (11% / 18.75%, 2,700-16,700, 7 brackets)", ps.status === 200 && ps.data.rules.employeeInsPct === 11 && ps.data.rules.companyInsPct === 18.75 && ps.data.rules.insMinWage === 2700 && ps.data.rules.insMaxWage === 16700 && ps.data.rules.brackets.length === 7, ps.json);
+  check("payroll rules: HR cannot edit -> 403", (await call("PUT", `/api/payroll-settings?companyId=${C.UNITED}`, { cookie: S.hr, body: ps.data.rules })).status === 403);
+  const badRules = await call("PUT", `/api/payroll-settings?companyId=${C.UNITED}`, { cookie: S.cfo, body: { ...ps.data.rules, insMinWage: 99_999 } });
+  check("payroll rules: invalid table -> 422", badRules.status === 422, badRules.status);
+  check("payroll rules: CFO saves", (await call("PUT", `/api/payroll-settings?companyId=${C.UNITED}`, { cookie: S.cfo, body: ps.data.rules })).status === 200);
+
+  // ── multi-currency ──
+  const usdBank = nileBanks.find((b) => b.currency === "USD");
+  check("USD bank account seeded", !!usdBank, nileBanks.map((b) => b.currency));
+  const rates = await call("GET", `/api/exchange-rates?companyId=${C.NILE}&currency=USD&pageSize=5`, { cookie: S["acc.nile"] });
+  check("exchange-rate table readable", rates.status === 200 && rates.data.items.length > 0);
+  const fxExp = await call("POST", "/api/expenses", { cookie: S["acc.nile"], body: { companyId: C.NILE, type: "ADMIN", date: "2026-09-10", amount: 50, currency: "USD", paymentMethod: "BANK", bankAccountId: usdBank.id, description: "smoke USD" } });
+  check("USD expense takes the rate from the table", fxExp.status === 201 && fxExp.data.currency === "USD" && Number(fxExp.data.exchangeRate) > 1, fxExp.json);
+  const noRate = await call("POST", "/api/expenses", { cookie: S["acc.nile"], body: { companyId: C.NILE, type: "ADMIN", date: "2026-09-10", amount: 50, currency: "KWD", paymentMethod: "BANK", bankAccountId: usdBank.id } });
+  check("currency without a rate -> 422", noRate.status === 422, noRate.status);
+  const banksList = (await call("GET", `/api/bank-accounts?companyId=${C.NILE}`, { cookie: S.treasury })).data.items as any[];
+  check("USD bank shows USD balance", Number(banksList.find((b) => b.id === usdBank.id)?.fxBalance) > 0);
+
+  // ── quotation lines linked by request-item id ──
+  const pr2 = await call("POST", "/api/purchase-requests", { cookie: S.procurement, body: { companyId: C.NILE, date: "2026-09-22", requestedBy: "م. الموقع", items: [{ description: "رمل", unit: "م3", quantity: 30 }] } });
+  const otherItem = prItems[0];
+  const foreign = await call("POST", "/api/quotations", { cookie: S.procurement, body: { companyId: C.NILE, requestId: pr2.data.id, supplierId: supp[0].id, date: "2026-09-23", items: [{ requestItemId: otherItem.id, quantity: 1, unitPrice: 1 }] } });
+  check("quotation line pointing at another request's item -> rejected", foreign.status >= 400 && foreign.status < 500, foreign.status);
+  const noId = await call("POST", "/api/quotations", { cookie: S.procurement, body: { companyId: C.NILE, requestId: pr2.data.id, supplierId: supp[0].id, date: "2026-09-23", items: [{ description: "رمل", quantity: 30, unitPrice: 1 }] } });
+  check("quotation line without requestItemId -> 400", noId.status === 400, noId.status);
+
+  // ── persistent login throttling (random forwarded IP so the runner's IP is never locked) ──
+  const tip = `10.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`;
+  const temail = `throttle-${Date.now()}@example.invalid`;
+  let lastStatus = 0;
+  for (let i = 0; i < 11; i++) lastStatus = (await call("POST", "/api/auth/login", { body: { email: temail, password: "wrong-password" }, headers: { "x-forwarded-for": tip } })).status;
+  check("login throttled after 10 failures -> 429", lastStatus === 429, lastStatus);
 
   check("logout", (await call("POST", "/api/auth/logout", { cookie: S.viewer })).status === 200);
   check("session invalid after logout -> 401", (await call("GET", "/api/auth/me", { cookie: S.viewer })).status === 401);
