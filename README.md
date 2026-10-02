@@ -406,15 +406,27 @@ ADMIN_EMAIL=you@company.com ADMIN_PASSWORD='…' npm run db:migrate && npm run d
 * **Database:** any PostgreSQL ≥ 14 (tested on 17). Set `DATABASE_URL` for the app — on Neon / Supabase the **pooled** URL — and the **direct** URL in `DIRECT_URL` (or `DATABASE_URL_UNPOOLED` / `POSTGRES_URL_NON_POOLING`, which the Neon / Supabase integrations set automatically): migrations always use the direct one.
 * **Migrations** run automatically: `vercel-build` (Vercel) and `start:prod` (Render, Railway, VPS) call `scripts/migrate-deploy.mjs` → `prisma migrate deploy`, which takes an advisory lock (safe with several instances) and never resets data. `SKIP_MIGRATIONS=true` disables it (e.g. preview deployments without a DB).
 * **First start:** a fresh production database is empty — no demo data. `scripts/bootstrap.ts` (run by `vercel-build` / `start:prod`, or `npm run db:bootstrap`) creates the default role permissions and approval workflows if missing and the first SUPER_ADMIN from `ADMIN_EMAIL` / `ADMIN_PASSWORD` (≥ 10 chars) if that email doesn't exist; it never changes existing data. Log in, create the companies, then users. Only for a demo instance: `npm run db:seed` against the DB (**truncates everything**).
+* **Demo data on a remote DB — seed locally, then restore.** `db:seed` goes through the application services (thousands of small queries), so against a remote database every round trip counts: seeding Neon directly from a machine outside the region took ~50 min, while seeding a local PostgreSQL takes ~20 s. Seed a scratch local DB and copy it over with tools of the same major version as the server (Neon: PostgreSQL 17):
+  ```bash
+  createdb ccs_stage                                   # scratch local DB
+  DATABASE_URL=postgresql://…/ccs_stage npx prisma migrate deploy
+  DATABASE_URL=postgresql://…/ccs_stage npm run db:seed
+  pg_dump --no-owner --no-acl -d postgresql://…/ccs_stage -f stage.sql
+  # target = DIRECT (non-pooled) URL; this REPLACES everything in its public schema
+  { echo 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'; cat stage.sql; } | psql "$DIRECT_URL" -v ON_ERROR_STOP=1 --single-transaction
+  dropdb ccs_stage; rm stage.sql
+  ```
+  `_prisma_migrations` is part of the dump, so later `prisma migrate deploy` runs continue normally.
 * **Attachments:** set `S3_BUCKET` (+ `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_ENDPOINT` for R2 / Wasabi / MinIO) and the S3 driver is selected automatically. On an ephemeral filesystem (Vercel is detected; set `EPHEMERAL_FS=true` elsewhere) local uploads are refused with a clear error and `/api/health?deep=1` reports storage as failing, unless `ALLOW_EPHEMERAL_UPLOADS=true` (or a persistent volume with `UPLOAD_DIR`). Documents remember which driver stored them, so switching keeps old files readable.
 * **Always set:** `COOKIE_SECURE=true`, `SHOW_DEMO_ACCOUNTS=false`. Health check: `GET /api/health` (DB) / `?deep=1` (DB + storage). Login throttling lives in PostgreSQL, so it is shared across instances.
 
 ### C) Vercel + Neon
 
 1. **Neon:** create a project (region close to the Vercel region, e.g. `aws-eu-central-1` with `fra1`). Copy the *pooled* connection string (`…-pooler…`, add `?sslmode=require&pgbouncer=true&connection_limit=1` for serverless) and the *direct* one. Or install the Neon integration from the Vercel marketplace — it sets `DATABASE_URL` (pooled) and `DATABASE_URL_UNPOOLED` (direct) for you.
-2. **Vercel:** *Add New → Project* → import the repo. `vercel.json` already sets `npm ci` and `buildCommand: npm run vercel-build` (prisma generate → migrate deploy → bootstrap → next build) and region `fra1`.
+2. **Vercel:** *Add New → Project* → import the repo. `vercel.json` already sets `installCommand: npm ci --include=dev` (build tools — Tailwind/PostCSS, TypeScript, `@types/*` — are devDependencies), `buildCommand: npm run vercel-build` (prisma generate → migrate deploy → bootstrap → next build), region `fra1`, and `git.deploymentEnabled` so only `main` deploys (no preview builds for other branches — they would have no database env vars).
 3. **Environment variables** (Production, and Preview if previews get a DB branch): `DATABASE_URL`, `DIRECT_URL` (unless the integration set `DATABASE_URL_UNPOOLED`), `COOKIE_SECURE=true`, `SHOW_DEMO_ACCOUNTS=false`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `S3_BUCKET` + S3 credentials (the filesystem is ephemeral — uploads need S3/R2). For previews without a database set `SKIP_MIGRATIONS=true`.
 4. Deploy, open `/api/health?deep=1`, log in with `ADMIN_EMAIL`. Remove `ADMIN_PASSWORD` afterwards if you like (the user already exists).
+5. **Don't set `NODE_ENV` in the Vercel project.** Vercel sets `NODE_ENV=production` for the build and the runtime itself; a project-level `NODE_ENV=production` also applies to the install step, where plain `npm ci` then skips devDependencies and `next build` fails (`module_not_found` for `@tailwindcss/postcss`). `--include=dev` in `vercel.json` guards against this, but leave `NODE_ENV` unset anyway.
 
 ### D) Render (Blueprint, `render.yaml`)
 
