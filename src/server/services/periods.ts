@@ -5,18 +5,27 @@ import { D } from "@/lib/money";
 import { badRequest, notFound, unprocessable } from "@/lib/errors";
 import { audit } from "../audit";
 import { requirePerm, type Ctx } from "../context";
+import { accountIdByKey, CLOSING_SOURCE_TYPES, createJournalEntry, EXCLUDE_CLOSING, reverseJournalEntry, type LineInput } from "./accounting";
 
 const ym = (d: Date) => ({ year: d.getUTCFullYear(), month: d.getUTCMonth() + 1 });
 export const periodLabel = (year: number, month: number) => `${year}-${String(month).padStart(2, "0")}`;
 
-/** Throws 422 if `date` falls in a CLOSED period (or closed fiscal year) of the company. Dates without a defined period are open. */
+/**
+ * Throws 422 if `date` falls in a CLOSED period (or closed fiscal year) of the company, or — once the company has
+ * at least one fiscal year — if the date is not covered by any fiscal year. Companies without fiscal years are unrestricted.
+ */
 export async function assertPeriodOpen(tx: Tx, companyId: string, date: Date | string | null | undefined, what = "Transactions") {
   if (!date) return;
   const d = date instanceof Date ? date : new Date(date);
   if (Number.isNaN(d.getTime())) return;
   const { year, month } = ym(d);
   const p = await tx.accountingPeriod.findUnique({ where: { companyId_year_month: { companyId, year, month } }, include: { fiscalYear: { select: { status: true, name: true } } } });
-  if (!p) return;
+  if (!p) {
+    const years = await tx.fiscalYear.findMany({ where: { companyId }, select: { name: true }, orderBy: { startDate: "asc" } });
+    if (years.length)
+      throw unprocessable(`Date ${d.toISOString().slice(0, 10)} is outside the company's fiscal years (${years.map((y) => y.name).join(", ")}) — ${what.toLowerCase()} must be dated inside an open fiscal year. Create the fiscal year first.`);
+    return;
+  }
   if (p.status === "CLOSED" || p.fiscalYear.status === "CLOSED")
     throw unprocessable(`Accounting period ${periodLabel(year, month)} is closed — ${what.toLowerCase()} dated in it cannot be created, edited or posted. Reopen the period first.`);
 }
@@ -162,9 +171,55 @@ export async function closeFiscalYear(tx: Tx, ctx: Ctx, id: string) {
   if (fy.status === "CLOSED") throw unprocessable("Fiscal year is already closed");
   const open = fy.periods.filter((p) => p.status !== "CLOSED");
   if (open.length) throw unprocessable(`Close all periods first (${open.length} still open)`);
-  await tx.fiscalYear.update({ where: { id }, data: { status: "CLOSED", closedAt: new Date(), closedById: ctx.user.id } });
-  await audit(tx, ctx, { action: "CLOSE_YEAR", entity: "FiscalYear", entityId: id, companyId: fy.companyId, after: { status: "CLOSED", name: fy.name } });
+  const earlierOpen = await tx.fiscalYear.findFirst({ where: { companyId: fy.companyId, startDate: { lt: fy.startDate }, status: "OPEN" } });
+  if (earlierOpen) throw unprocessable(`Earlier fiscal year ${earlierOpen.name} is still open — close fiscal years in order`);
+  const closing = await postClosingEntry(tx, ctx, fy);
+  await tx.fiscalYear.update({ where: { id }, data: { status: "CLOSED", closedAt: new Date(), closedById: ctx.user.id, closingEntryId: closing?.entry.id ?? null } });
+  await audit(tx, ctx, {
+    action: "CLOSE_YEAR",
+    entity: "FiscalYear",
+    entityId: id,
+    companyId: fy.companyId,
+    after: { status: "CLOSED", name: fy.name, closingEntry: closing?.entry.number ?? null, netProfit: closing?.netProfit.toFixed(2) ?? "0.00" },
+  });
   return tx.fiscalYear.findUnique({ where: { id }, include: { periods: { orderBy: { startDate: "asc" } } } });
+}
+
+/** Revenue/expense balances of the fiscal year (posted entries, excluding earlier closing entries). */
+export async function profitAndLossBalances(tx: Tx, companyId: string, start: Date, end: Date) {
+  const sums = await tx.journalLine.groupBy({
+    by: ["accountId"],
+    where: { companyId, account: { type: { in: ["REVENUE", "EXPENSE"] } }, entry: { status: "POSTED", date: { gte: start, lt: new Date(end.getTime() + 86400000) }, AND: [EXCLUDE_CLOSING] } },
+    _sum: { debit: true, credit: true },
+  });
+  return sums.map((s) => ({ accountId: s.accountId, net: D(s._sum.debit).minus(D(s._sum.credit)) })).filter((s) => !s.net.isZero());
+}
+
+/**
+ * Year-end closing entry dated on the last day of the fiscal year: every revenue and expense account is brought to zero
+ * against Retained Earnings (net profit credits retained earnings, a loss debits it). Posted into the (already closed)
+ * last period on purpose — it is the only entry allowed there.
+ */
+async function postClosingEntry(tx: Tx, ctx: Ctx, fy: { id: string; companyId: string; name: string; startDate: Date; endDate: Date }) {
+  const balances = await profitAndLossBalances(tx, fy.companyId, fy.startDate, fy.endDate);
+  if (!balances.length) return null;
+  const lines: LineInput[] = balances.map((b) => (b.net.greaterThan(0) ? { accountId: b.accountId, credit: b.net } : { accountId: b.accountId, debit: b.net.abs() }));
+  // net of the closing lines: debit-heavy => profit (credit retained earnings)
+  const net = lines.reduce((s, l) => s.plus(D(l.debit)).minus(D(l.credit)), D(0));
+  const re = await accountIdByKey(tx, fy.companyId, "RETAINED_EARNINGS");
+  if (net.greaterThan(0)) lines.push({ accountId: re, credit: net, description: "صافي ربح السنة / Net profit for the year" });
+  else if (net.lessThan(0)) lines.push({ accountId: re, debit: net.abs(), description: "صافي خسارة السنة / Net loss for the year" });
+  const entry = await createJournalEntry(tx, ctx, {
+    companyId: fy.companyId,
+    date: fy.endDate,
+    description: `قيد إقفال السنة المالية ${fy.name} (إقفال الإيرادات والمصروفات في الأرباح المرحلة) / Year-end closing FY ${fy.name}`,
+    status: "POSTED",
+    sourceType: "YEAR_END_CLOSE",
+    sourceId: fy.id,
+    lines,
+    skipPeriodCheck: true,
+  });
+  return { entry, netProfit: net };
 }
 
 export async function reopenFiscalYear(tx: Tx, ctx: Ctx, id: string, reason: string) {
@@ -175,7 +230,14 @@ export async function reopenFiscalYear(tx: Tx, ctx: Ctx, id: string, reason: str
   if (fy.status !== "CLOSED") throw unprocessable("Fiscal year is not closed");
   const later = await tx.fiscalYear.findFirst({ where: { companyId: fy.companyId, startDate: { gt: fy.startDate }, status: "CLOSED" } });
   if (later) throw unprocessable(`Later fiscal year ${later.name} is closed — reopen it first`);
-  await tx.fiscalYear.update({ where: { id }, data: { status: "OPEN", reopenedAt: new Date(), reopenedById: ctx.user.id, reopenReason: reason.trim() } });
-  await audit(tx, ctx, { action: "REOPEN_YEAR", entity: "FiscalYear", entityId: id, companyId: fy.companyId, after: { status: "OPEN", reason: reason.trim() } });
+  // undo the closing entry with a reversing entry on the same date (the original stays for the audit trail)
+  let reversal: { id: string; number: string } | null = null;
+  if (fy.closingEntryId) {
+    const ce = await tx.journalEntry.findUnique({ where: { id: fy.closingEntryId } });
+    const already = ce ? await tx.journalEntry.findFirst({ where: { reversalOfId: ce.id } }) : null;
+    if (ce && ce.status === "POSTED" && !already) reversal = await reverseJournalEntry(tx, ctx, ce.id, `إعادة فتح السنة المالية ${fy.name}: ${reason.trim()}`, fy.endDate, { skipPeriodCheck: true });
+  }
+  await tx.fiscalYear.update({ where: { id }, data: { status: "OPEN", reopenedAt: new Date(), reopenedById: ctx.user.id, reopenReason: reason.trim(), closingEntryId: null } });
+  await audit(tx, ctx, { action: "REOPEN_YEAR", entity: "FiscalYear", entityId: id, companyId: fy.companyId, after: { status: "OPEN", reason: reason.trim(), closingReversal: reversal?.number ?? null } });
   return tx.fiscalYear.findUnique({ where: { id }, include: { periods: { orderBy: { startDate: "asc" } } } });
 }

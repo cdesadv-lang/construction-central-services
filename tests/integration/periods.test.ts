@@ -84,13 +84,64 @@ describe("accounting period locking", () => {
   it("fiscal year can only be closed when all its periods are closed", async () => {
     const fy = await prisma.fiscalYear.findFirstOrThrow({ where: { companyId: nileId, name: "2026" } });
     await expectApiError(act(cfo, "fiscal-years", fy.id, "close"), 422);
+  });
+
+  it("year-end close posts a closing entry (revenue & expenses → retained earnings); reopen reverses it; re-close re-posts", async () => {
     const fy25 = await prisma.fiscalYear.findFirstOrThrow({ where: { companyId: nileId, name: "2025" } });
-    await act(cfo, "fiscal-years", fy25.id, "close");
+    expect(fy25.status).toBe("CLOSED"); // closed by the seed
+    expect(fy25.closingEntryId).toBeTruthy();
+    const range = { gte: new Date("2025-01-01"), lt: new Date("2026-01-01") };
+    const plNet = async (withClosing: boolean) => {
+      const a = await prisma.journalLine.aggregate({
+        where: { companyId: nileId, account: { type: { in: ["REVENUE", "EXPENSE"] } }, entry: { status: "POSTED", date: range, ...(withClosing ? {} : { AND: [{ OR: [{ sourceType: null }, { sourceType: { notIn: ["YEAR_END_CLOSE", "YEAR_END_CLOSE_REVERSAL"] } }] }] }) } },
+        _sum: { debit: true, credit: true },
+      });
+      return Math.round((Number(a._sum.credit ?? 0) - Number(a._sum.debit ?? 0)) * 100) / 100;
+    };
+    const profit = await plNet(false);
+    expect(profit).not.toBe(0);
+    expect(await plNet(true)).toBe(0); // all P&L accounts are zero after the closing entry
+    const re = await accountIdByKey(prisma, nileId, "RETAINED_EARNINGS");
+    const ce = await prisma.journalEntry.findUniqueOrThrow({ where: { id: fy25.closingEntryId! }, include: { lines: true } });
+    expect(ce.sourceType).toBe("YEAR_END_CLOSE");
+    expect(ce.date.toISOString().slice(0, 10)).toBe("2025-12-31");
+    const reLine = ce.lines.find((l) => l.accountId === re)!;
+    expect(Number(reLine.credit) - Number(reLine.debit)).toBeCloseTo(profit, 2);
+    // the income statement still shows the year's profit (closing entries are excluded from P&L)
+    const is = await (await import("@/server/services/reports")).incomeStatement(cfo, { companyId: nileId, from: "2025-01-01", to: "2025-12-31" });
+    expect(Number(is.meta!.netProfit)).toBeCloseTo(profit, 2);
+    // the closing entry cannot be reversed by hand
+    await expectApiError(act(cfo, "journal-entries", ce.id, "reverse", { reason: "nope" }), 422);
     // periods of a closed year cannot be reopened until the year is reopened
     const dec = await period(2025, 12);
     await expectApiError(act(cfo, "accounting-periods", dec.id, "reopen", { reason: "should fail" }), 422);
     await act(cfo, "fiscal-years", fy25.id, "reopen", { reason: "external audit adjustments" });
-    expect((await prisma.fiscalYear.findUniqueOrThrow({ where: { id: fy25.id } })).status).toBe("OPEN");
+    const reopened = await prisma.fiscalYear.findUniqueOrThrow({ where: { id: fy25.id } });
+    expect(reopened.status).toBe("OPEN");
+    expect(reopened.closingEntryId).toBeNull();
+    const rev = await prisma.journalEntry.findFirstOrThrow({ where: { reversalOfId: ce.id } });
+    expect(rev.sourceType).toBe("YEAR_END_CLOSE_REVERSAL");
+    expect(rev.date.toISOString().slice(0, 10)).toBe("2025-12-31");
+    expect(await plNet(true)).toBeCloseTo(profit, 2); // P&L balances are back
+    // still: December 2025 itself stays closed, so nothing else can be posted there
+    await expectApiError(create(acc, "expenses", { companyId: nileId, type: "ADMIN", date: "2025-12-20", amount: 10, paymentMethod: "CASH", cashBoxId }), 422);
+    await act(cfo, "fiscal-years", fy25.id, "close");
+    const again = await prisma.fiscalYear.findUniqueOrThrow({ where: { id: fy25.id } });
+    expect(again.status).toBe("CLOSED");
+    expect(again.closingEntryId).toBeTruthy();
+    expect(again.closingEntryId).not.toBe(ce.id);
+    expect(await plNet(true)).toBe(0);
+    const logs = await prisma.auditLog.findMany({ where: { entity: "FiscalYear", entityId: fy25.id }, select: { action: true } });
+    expect(logs.map((l) => l.action)).toEqual(expect.arrayContaining(["CLOSE_YEAR", "REOPEN_YEAR"]));
+  });
+
+  it("rejects documents and journal entries dated outside every fiscal year", async () => {
+    const e = await expectApiError(create(acc, "expenses", { companyId: nileId, type: "ADMIN", date: "2024-12-15", amount: 10, paymentMethod: "CASH", cashBoxId }), 422);
+    expect(e.message).toMatch(/outside the company's fiscal years/);
+    const body = je("2027-01-05");
+    body.lines[0].accountId = await accountIdByKey(prisma, nileId, "ADMIN_EXPENSES");
+    body.lines[1].accountId = await accountIdByKey(prisma, nileId, "OTHER_INCOME");
+    await expectApiError(create(acc, "journal-entries", body), 422);
   });
 
   it("rejects overlapping fiscal years", async () => {

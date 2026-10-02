@@ -20,6 +20,7 @@ export async function dashboard(ctx: Ctx, companyId?: string) {
       SELECT to_char(e."date", 'YYYY-MM') AS m, a."type"::text AS type, SUM(l."debit") AS d, SUM(l."credit") AS c
       FROM "JournalLine" l JOIN "JournalEntry" e ON e."id" = l."entryId" JOIN "Account" a ON a."id" = l."accountId"
       WHERE e."status" = 'POSTED' AND l."companyId" = ANY(${companyIds}) AND a."type" IN ('REVENUE','EXPENSE')
+        AND COALESCE(e."sourceType", '') NOT IN ('YEAR_END_CLOSE', 'YEAR_END_CLOSE_REVERSAL')
       ${ctx.projectIds ? Prisma.sql`AND l."projectId" = ANY(${ctx.projectIds})` : Prisma.empty}
       GROUP BY 1, 2 ORDER BY 1`,
     prisma.account.findMany({ where: { companyId: { in: companyIds }, systemKey: { in: ["CASH_PARENT", "BANK_PARENT"] } }, select: { id: true, systemKey: true } }),

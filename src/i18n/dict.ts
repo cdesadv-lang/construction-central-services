@@ -292,10 +292,10 @@ const P: Record<string, Record<string, [string, string]>> = {
     // periods
     fiscalYears: ["السنوات المالية", "Fiscal years"], newFiscalYear: ["سنة مالية جديدة", "New fiscal year"], year: ["السنة", "Year"], startMonth: ["شهر البداية", "Start month"],
     period: ["الفترة", "Period"], checklist: ["قائمة مراجعة الإقفال الشهري", "Month-end close checklist"], closePeriod: ["إقفال الفترة", "Close period"], reopenPeriod: ["إعادة فتح الفترة", "Reopen period"],
-    closeYear: ["إقفال السنة", "Close year"], reopenYear: ["إعادة فتح السنة", "Reopen year"], reason: ["السبب", "Reason"], reasonPrompt: ["سبب إعادة الفتح (إلزامي)", "Reason for reopening (required)"],
+    closeYear: ["إقفال السنة", "Close year"], reopenYear: ["إعادة فتح السنة", "Reopen year"], closingEntry: ["قيد الإقفال", "Closing entry"], closingReversed: ["تم عكس قيد الإقفال", "Closing entry reversed"], reason: ["السبب", "Reason"], reasonPrompt: ["سبب إعادة الفتح (إلزامي)", "Reason for reopening (required)"],
     closedBy: ["أقفلت في", "Closed at"], reopened: ["أعيد فتحها", "Reopened"], blocking: ["إلزامي", "Required"], warning: ["تنبيه", "Warning"], auto: ["آلي", "Automatic"], manual: ["يدوي", "Manual"],
     canClose: ["جاهزة للإقفال", "Ready to close"], cannotClose: ["توجد بنود غير مستوفاة", "Open items remain"], selectCompany: ["اختر شركة من الأعلى لعرض فتراتها", "Select a company at the top to see its periods"],
-    markDone: ["تم", "Done"], undo: ["تراجع", "Undo"], periodsHint: ["لا يمكن إنشاء أو تعديل أو ترحيل أي قيد أو مستند بتاريخ داخل فترة مقفلة.", "Nothing dated inside a closed period can be created, edited or posted."],
+    markDone: ["تم", "Done"], undo: ["تراجع", "Undo"], periodsHint: ["لا يمكن إنشاء أو تعديل أو ترحيل أي قيد أو مستند بتاريخ داخل فترة مقفلة أو خارج السنوات المالية المعرفة. إقفال السنة ينشئ قيد إقفال الإيرادات والمصروفات في الأرباح المرحلة، وإعادة فتحها تعكسه.", "Nothing dated inside a closed period — or outside the defined fiscal years — can be created, edited or posted. Closing a year posts the closing entry (revenue & expenses → retained earnings); reopening reverses it."],
     // cheques
     chequeLifecycle: ["دورة حياة الشيك", "Cheque lifecycle"], movements: ["الحركات", "Movements"], deposit: ["إيداع بالحساب", "Deposit"], collect: ["إرسال للتحصيل", "Send for collection"],
     clear: ["تحصيل / صرف", "Clear"], bounce: ["ارتداد", "Bounce"], cancelCheque: ["إلغاء الشيك", "Cancel cheque"], represent: ["إعادة تقديم", "Re-present"], bankCharges: ["مصاريف بنكية", "Bank charges"],

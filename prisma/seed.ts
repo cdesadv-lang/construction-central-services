@@ -644,11 +644,15 @@ async function main() {
         break;
       }
     }
+    // Year-end close of FY 2025: posts the closing entry (revenue & expenses -> retained earnings)
+    const fy25 = await prisma.fiscalYear.findFirstOrThrow({ where: { companyId: co.id, name: "2025" }, include: { periods: true } });
+    if (fy25.periods.every((p) => p.status === "CLOSED")) await act(ctxByRole.FINANCE_MANAGER!, "fiscal-years", fy25.id, "close");
   }
 
   const counts = {
     companies: await prisma.company.count(),
     closedPeriods: await prisma.accountingPeriod.count({ where: { status: "CLOSED" } }),
+    closedFiscalYears: await prisma.fiscalYear.count({ where: { status: "CLOSED" } }),
     exchangeRates: await prisma.exchangeRate.count(),
     fxJournalLines: await prisma.journalLine.count({ where: { currency: { not: null } } }),
     projects: await prisma.project.count(),

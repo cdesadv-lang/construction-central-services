@@ -1363,6 +1363,8 @@ model FiscalYear {
   reopenedById String?
   reopenReason String?
   notes        String?
+  /// year-end closing entry (revenue & expense balances closed to retained earnings); null while the year is open
+  closingEntryId String?
   createdAt    DateTime           @default(now())
   periods      AccountingPeriod[]
 

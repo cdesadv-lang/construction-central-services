@@ -163,6 +163,12 @@ export function PeriodsManager() {
             <h3 className="text-lg font-bold">{t("x.fiscalYears")}: {fy.name}</h3>
             <Badge value={fy.status} />
             <span className="text-xs text-slate-500">{fmtDate(fy.startDate)} → {fmtDate(fy.endDate)}</span>
+            {fy.closingEntry && (
+              <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-700">
+                {t("x.closingEntry")}: <span className="num">{fy.closingEntry.number}</span>
+              </span>
+            )}
+            {!fy.closingEntry && (fy.closingHistory?.length ?? 0) > 0 && <span className="text-xs text-amber-700">{t("x.closingReversed")} ({fy.closingHistory.length})</span>}
             {can("periods", "approve") && (
               <span className="ms-auto">
                 {fy.status === "OPEN" ? (

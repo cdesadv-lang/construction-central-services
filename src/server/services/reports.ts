@@ -5,6 +5,7 @@ import { D, num, r2 } from "@/lib/money";
 import { debitNormal } from "@/lib/accounting";
 import { badRequest, notFound } from "@/lib/errors";
 import { assertCompany, assertProject, companyScope, type Ctx } from "../context";
+import { EXCLUDE_CLOSING } from "./accounting";
 
 export type Col = { key: string; type?: "text" | "money" | "date" | "pct" | "number" };
 export interface ReportResult {
@@ -161,7 +162,8 @@ export async function generalLedger(ctx: Ctx, p: ReportParams): Promise<ReportRe
 
 async function plByAccount(companyIds: string[], projectFilter: any, from?: Date, to?: Date) {
   const accounts = await prisma.account.findMany({ where: { companyId: { in: companyIds }, type: { in: ["REVENUE", "EXPENSE"] }, isPostable: true }, orderBy: { code: "asc" } });
-  const sums = await accountSums(companyIds, { ...projectFilter, entry: { status: "POSTED", ...(dateRange(from, to) ? { date: dateRange(from, to) } : {}) } });
+  // year-end closing entries zero the revenue/expense accounts; the P&L must show the year's activity
+  const sums = await accountSums(companyIds, { ...projectFilter, entry: { status: "POSTED", AND: [EXCLUDE_CLOSING], ...(dateRange(from, to) ? { date: dateRange(from, to) } : {}) } });
   const byCode = new Map<string, { code: string; name: string; type: string; amount: Prisma.Decimal }>();
   for (const a of accounts) {
     const s = sums.get(a.id);

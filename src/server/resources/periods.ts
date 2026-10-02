@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { z } from "zod";
 import { closeFiscalYear, closePeriod, createFiscalYear, periodChecklist, reopenFiscalYear, reopenPeriod, setChecklistItem } from "../services/periods";
+import { prisma } from "@/lib/db";
 import type { ResourceDef } from "./engine";
 import { optStr } from "./z";
 
@@ -16,6 +17,16 @@ export const periodResources: Record<string, ResourceDef> = {
     include: { periods: { orderBy: { startDate: "asc" } } },
     orderBy: [{ startDate: "desc" }],
     customCreate: async (tx, ctx, data) => createFiscalYear(tx, ctx, data),
+    // closing entry number + the reversal entries of earlier closings (reopen history)
+    decorate: async (rows) => {
+      const ids = rows.map((r) => r.id);
+      const entries = await prisma.journalEntry.findMany({ where: { sourceId: { in: ids }, sourceType: { in: ["YEAR_END_CLOSE", "YEAR_END_CLOSE_REVERSAL"] } }, select: { id: true, number: true, sourceId: true, sourceType: true, totalDebit: true }, orderBy: { createdAt: "asc" } });
+      return rows.map((r) => ({
+        ...r,
+        closingEntry: entries.find((e) => e.id === r.closingEntryId) ?? null,
+        closingHistory: entries.filter((e) => e.sourceId === r.id),
+      }));
+    },
     actions: {
       close: { perm: "approve", run: (tx, ctx, e) => closeFiscalYear(tx, ctx, e.id) },
       reopen: { perm: "approve", run: (tx, ctx, e, body) => reopenFiscalYear(tx, ctx, e.id, String(body?.reason ?? "")) },

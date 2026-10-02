@@ -152,7 +152,14 @@ export interface EntryInput {
   sourceType?: string | null;
   sourceId?: string | null;
   reversalOfId?: string | null;
+  /** internal only: year-end closing entries are posted into the closed last period of the year */
+  skipPeriodCheck?: boolean;
 }
+
+/** Journal sources produced by year-end closing; excluded from profit & loss reporting (they zero revenue/expense accounts). */
+export const CLOSING_SOURCE_TYPES = ["YEAR_END_CLOSE", "YEAR_END_CLOSE_REVERSAL"];
+/** Prisma JournalEntry filter excluding closing entries (null sourceType = manual entries are kept). */
+export const EXCLUDE_CLOSING: Prisma.JournalEntryWhereInput = { OR: [{ sourceType: null }, { sourceType: { notIn: CLOSING_SOURCE_TYPES } }] };
 
 async function validateLines(tx: Tx, companyId: string, lines: LineInput[]) {
   let totals;
@@ -196,7 +203,7 @@ function lineData(companyId: string, entryProjectId: string | null | undefined, 
 }
 
 export async function createJournalEntry(tx: Tx, ctx: Ctx | null, input: EntryInput) {
-  await assertPeriodOpen(tx, input.companyId, input.date, "Journal entries");
+  if (!input.skipPeriodCheck) await assertPeriodOpen(tx, input.companyId, input.date, "Journal entries");
   if (input.projectId) {
     const p = await tx.project.findFirst({ where: { id: input.projectId, companyId: input.companyId } });
     if (!p) throw badRequest("Project does not belong to this company");
@@ -270,7 +277,7 @@ export async function postJournalEntry(tx: Tx, ctx: Ctx, id: string) {
 }
 
 /** Creates and posts a reversing entry (swaps debits/credits). The original stays posted, so the net effect is zero. */
-export async function reverseJournalEntry(tx: Tx, ctx: Ctx | null, id: string, reason?: string, date?: Date) {
+export async function reverseJournalEntry(tx: Tx, ctx: Ctx | null, id: string, reason?: string, date?: Date, opts: { skipPeriodCheck?: boolean } = {}) {
   const e = await tx.journalEntry.findUnique({ where: { id }, include: { lines: true } });
   if (!e) throw notFound();
   if (e.status !== "POSTED") throw unprocessable("Only posted entries can be reversed");
@@ -286,6 +293,7 @@ export async function reverseJournalEntry(tx: Tx, ctx: Ctx | null, id: string, r
     sourceType: e.sourceType ? `${e.sourceType}_REVERSAL` : "REVERSAL",
     sourceId: e.sourceId,
     reversalOfId: e.id,
+    skipPeriodCheck: opts.skipPeriodCheck,
     lines: e.lines.map((l) => ({
       accountId: l.accountId,
       debit: l.credit,
